@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Fixed
+
+- Files inside Keychains, Preferences, Mail, Messages, Safari and the other protected folders could be moved to the Trash; only the folders themselves were protected. Everything inside them is now off-limits, as are `~/.ssh`, `~/.gnupg`, and the containers where Safari, Mail, Contacts and Notes keep their data.
+- A Photos library could be moved to the Trash in two keypresses, and then deleted for good by emptying the Trash. Photos libraries and their contents are now blocked; delete photos in the Photos app instead.
+- Items labeled `system` (Docker's disk, Ollama models, Homebrew) could be removed despite the label; they are now blocked, with the command to use instead. Tool-owned paths are recognized before other rules, so `/opt/homebrew/lib/node_modules` is no longer labeled `junk`, and `~/.ollama` itself is covered.
+
+### Added
+
+- Unit tests (`npm test`), run in CI.
+
 ## [0.1.0] - 2026-11-14
 
 ### Added

@@ -42,6 +42,7 @@
     "demo": "tsc -p tsconfig.json && node bin/fix-storage.cjs --demo",
     "plain": "tsc -p tsconfig.json && node bin/fix-storage.cjs --plain",
     "typecheck": "tsc --noEmit",
+    "test": "rm -rf .test-dist && tsc -p tsconfig.test.json && node --test .test-dist/test/*.test.js",
     "prepack": "npm run build",
     "clean": "rm -rf dist"
   },

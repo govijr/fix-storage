@@ -14,6 +14,7 @@ import {
   deletesForGood,
   demoChildren,
   listFolder,
+  managedByTool,
   moveToTrash,
   reveal,
   trashPathFor,
@@ -433,6 +434,8 @@ export class Store {
   blocked(item: Item | undefined): string | null {
     if (!item) return "Nothing selected.";
     if (this.state.selected === "system") return "macOS manages System data.";
+    const managed = managedByTool(item, this.state.selected);
+    if (managed) return managed;
     if (this.options.demo) return null;
     return cannotRemove(item.path);
   }

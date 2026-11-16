@@ -3,7 +3,7 @@ import { promises as fsp } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { roots, type CategoryId } from "./categories";
-import { isWhole, type Usage } from "./classify";
+import { classify, isWhole, type Usage } from "./classify";
 import { du, type Item } from "./scan";
 
 export interface ListHandle {
@@ -285,9 +285,11 @@ export function demoUsage(path: string, now: number = Date.now()): Usage {
 
 // ---- acting on one item -------------------------------------------------
 
-/** Folders whose removal would break the system or the user's account, whatever is inside. */
-function protectedPaths(home: string): Set<string> {
-  const lib = (name: string) => join(home, "Library", name);
+/**
+ * Folders that must stay where they are, though what is inside them may go:
+ * removing one would break the system or the user's account.
+ */
+function protectedFolders(home: string): Set<string> {
   return new Set(
     [
       ...roots(home).map((r) => r.path),
@@ -301,29 +303,61 @@ function protectedPaths(home: string): Set<string> {
       "/opt/homebrew/lib",
       home,
       join(home, "Library"),
-      lib("Keychains"),
-      lib("Preferences"),
-      lib("Mail"),
-      lib("Messages"),
-      lib("Accounts"),
-      lib("Cookies"),
-      lib("Calendars"),
-      lib("Safari"),
-      lib("Photos"),
-      lib("Biome"),
     ].map((p) => resolve(p)),
   );
+}
+
+/**
+ * Account data and credentials. Neither these folders nor anything inside
+ * them is ever offered for removal: their size is shown, nothing more.
+ */
+function privateData(home: string): string[] {
+  const lib = (name: string) => join(home, "Library", name);
+  return [
+    lib("Keychains"),
+    lib("Preferences"),
+    lib("Mail"),
+    lib("Messages"),
+    lib("Accounts"),
+    lib("Cookies"),
+    lib("Calendars"),
+    lib("Safari"),
+    lib("Photos"),
+    lib("Biome"),
+    // Apple's own apps keep their data in containers too.
+    lib("Containers/com.apple.Safari"),
+    lib("Containers/com.apple.mail"),
+    lib("Application Support/AddressBook"),
+    lib("Group Containers/group.com.apple.notes"),
+    join(home, ".ssh"),
+    join(home, ".gnupg"),
+  ].map((p) => resolve(p));
 }
 
 /** Why an item cannot be removed, or null when it can. */
 export function cannotRemove(path: string, home: string = homedir()): string | null {
   if (!path.startsWith("/")) return "Not a real path.";
   const target = resolve(path);
-  if (protectedPaths(home).has(target)) return "macOS or your account needs this folder.";
+  if (privateData(home).some((p) => target === p || target.startsWith(p + sep)))
+    return "Account data or credentials. This tool never removes it.";
+  if (target.split(sep).some((part) => part.toLowerCase().endsWith(".photoslibrary")))
+    return "A Photos library. Delete photos in the Photos app instead.";
+  if (protectedFolders(home).has(target)) return "macOS or your account needs this folder.";
   if (target.startsWith("/System/") || target.startsWith("/private/")) return "macOS manages this.";
   const known = roots(home).some((root) => target.startsWith(resolve(root.path) + sep));
   if (!known) return "Outside the folders this tool looks at.";
   return null;
+}
+
+/**
+ * Why a tool-managed item (Docker's disk, Ollama models, Homebrew) should be
+ * cleaned up with that tool instead, or null. Deleting these by hand breaks
+ * the tool that owns them.
+ */
+export function managedByTool(item: Item, category: CategoryId): string | null {
+  const label = classify(item, category);
+  if (label.verdict !== "system") return null;
+  return `A tool manages this: ${label.reason}.`;
 }
 
 /** True when the item lives where permanent deletion is fine: caches and the Trash. */

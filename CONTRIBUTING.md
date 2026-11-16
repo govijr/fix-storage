@@ -9,6 +9,7 @@ git clone https://github.com/govijr/fix-storage && cd fix-storage
 npm install
 npm run demo       # made-up disk, deletes nothing
 npm run typecheck
+npm test
 ```
 
 To work against your real disk without risk, use `npm start -- --dry-run`. Clearing and deleting only pretend in that mode.
@@ -31,7 +32,7 @@ You need macOS and Node.js 20.11+. For the graphical view, use a terminal with k
 ## Pull requests
 
 - Keep each PR to one change, and describe what you tried it on (demo, dry run, real disk).
-- Run `npm run typecheck` before pushing; CI runs it too.
+- Run `npm run typecheck` and `npm test` before pushing; CI runs both. Tests run against a temporary folder and never touch your disk.
 - For UI changes, include a screenshot or short recording.
 - Write UI text in plain, lowercase terminal style, and keep it short.
 

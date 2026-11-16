@@ -98,7 +98,7 @@ Everything is clickable too: categories, the disk meter, rows, the breadcrumb an
 | --- | --- | --- |
 | `junk` | Rebuilds by itself or is a leftover. Removing it loses nothing. | `node_modules`, `.next`, `__pycache__`, Pods, Xcode DerivedData, iOS DeviceSupport, `.dmg`/`.pkg` installers, caches, the Trash |
 | `unused` | Probably not needed, but your call. | build output, `.venv`, old simulators, Xcode archives, iPhone backups, archives in Downloads, screen recordings older than two weeks, anything not opened in a year |
-| `system` | A tool manages it; removing it by hand breaks the tool. The reason says which command to use instead. | Docker's disk image, Ollama models, Homebrew |
+| `system` | A tool manages it; removing it by hand breaks the tool, so fix-storage won't. The reason says which command to use instead. | Docker's disk image, Ollama models, Homebrew |
 | *(none)* | Yours and in use. | everything else |
 
 The rules live in [`src/core/classify.ts`](src/core/classify.ts). They are deliberately conservative; pull requests with new patterns are very welcome.
@@ -111,7 +111,7 @@ For a folder, fix-storage runs one `du` pass over it, then follows the biggest c
 
 - **Caches and Trash** items are deleted for good. Apps rebuild caches when they need them.
 - **Everything else** is moved to the Trash (with macOS's own `trash` command, or Finder on older systems), so you can drag it back out. The space comes back once you empty the Trash.
-- **Never removed:** System data, anything under `/System` or `/private`, your Keychains, Preferences, Mail, Messages, Photos and Safari data, the top-level folders the scan measures, and anything outside them.
+- **Never removed:** System data, anything under `/System` or `/private`, your Keychains and Preferences, the data Mail, Messages, Safari, Contacts and Notes keep in `~/Library` and everything inside it, Photos libraries and everything inside them, your `~/.ssh` and `~/.gnupg` keys, anything labeled `system` (and folders holding it, like `~/.ollama`), the top-level folders the scan measures, and anything outside them.
 - `--dry-run` and `--demo` never touch the disk.
 
 ## Uninstall
@@ -127,6 +127,7 @@ git clone https://github.com/govijr/fix-storage && cd fix-storage
 npm install
 npm run demo        # build and open the demo disk
 npm run typecheck
+npm test            # unit tests, run against a temporary folder
 ```
 
 The interface is React rendered by [pixel](https://www.npmjs.com/package/@zenbu-labs/pixel), which draws real pixels into terminals that support the kitty graphics protocol.

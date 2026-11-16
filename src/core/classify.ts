@@ -101,6 +101,18 @@ export function classify(item: Item, category: CategoryId, usage?: Usage, now: n
   if (category === "trash") return { verdict: "junk", reason: "already in the trash" };
   if (category === "caches") return { verdict: "junk", reason: "cache · apps rebuild it when they need it" };
 
+  // Things a tool owns; deleting by hand breaks the tool. Checked first, so a
+  // node_modules or build folder inside one is still the tool's business.
+  if (lower === "docker.raw" || path.includes("/com.docker.docker/"))
+    return { verdict: "system", reason: "docker's disk · shrink it with docker system prune" };
+  if (path.endsWith("/.ollama") || path.includes("/.ollama/"))
+    return { verdict: "system", reason: "local ai models · remove with ollama rm" };
+  if (
+    path.startsWith("/opt/homebrew/") ||
+    ["/usr/local/Cellar", "/usr/local/Caskroom", "/usr/local/Homebrew"].some((p) => path === p || path.startsWith(p + "/"))
+  )
+    return { verdict: "system", reason: "homebrew manages this · brew cleanup removes old versions" };
+
   // Things that rebuild themselves.
   if (lower === "node_modules") return { verdict: "junk", reason: `rebuilds with npm install${untouched}` };
   if (BUILD_CACHES.has(lower)) return { verdict: "junk", reason: `build cache · rebuilds itself${untouched}` };
@@ -124,13 +136,6 @@ export function classify(item: Item, category: CategoryId, usage?: Usage, now: n
   if (ARCHIVES.has(ext) && path.includes("/Downloads/")) return { verdict: "unused", reason: `downloaded archive${untouched}` };
   if (SCREEN_CAPTURE.test(name) && since !== null && since > 14 * DAY)
     return { verdict: "unused", reason: `screen capture from ${ago(since)}` };
-
-  // Things a tool owns; deleting by hand breaks the tool.
-  if (lower === "docker.raw" || path.includes("/com.docker.docker/"))
-    return { verdict: "system", reason: "docker's disk · shrink it with docker system prune" };
-  if (path.includes("/.ollama/models")) return { verdict: "system", reason: "local ai models · remove with ollama rm" };
-  if (path.startsWith("/opt/homebrew") || path.startsWith("/usr/local/Cellar"))
-    return { verdict: "system", reason: "homebrew manages this · brew cleanup removes old versions" };
 
   // Nothing about the name says junk; fall back to how long it has sat there.
   if (since !== null && usage) {

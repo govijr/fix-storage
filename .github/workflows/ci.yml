@@ -32,6 +32,7 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run build
+      - run: npm test
       - name: Smoke test the text modes
         run: |
           node bin/fix-storage.cjs --help
