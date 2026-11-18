@@ -1,6 +1,6 @@
 import { basename, extname } from "node:path";
 import type { CategoryId } from "./categories";
-import { IS_MAC } from "./platform";
+import { byOs, IS_LINUX } from "./platform";
 import type { Item } from "./scan";
 
 /**
@@ -118,7 +118,7 @@ const SYSTEM_REASONS: Array<[RegExp, string]> = [
 
 function systemReason(path: string): string {
   for (const [pattern, reason] of SYSTEM_REASONS) if (pattern.test(path)) return reason;
-  return IS_MAC ? "managed by macOS" : "managed by the system";
+  return byOs({ mac: "managed by macOS", linux: "managed by the system" });
 }
 
 /** Decides what an item probably is, from its name, where it lives, and when it was last used. */
@@ -181,7 +181,7 @@ export function classify(item: Item, category: CategoryId, usage?: Usage, now: n
     return { verdict: "system", reason: "snap manages this · snap remove --revision drops old versions" };
   if (/^\/var\/lib\/libvirt(\/|$)/.test(path))
     return { verdict: "system", reason: "virtual machines · remove them in virt-manager" };
-  if (!IS_MAC && /^\/(opt|usr\/local)(\/|$)/.test(path))
+  if (IS_LINUX && /^\/(opt|usr\/local)(\/|$)/.test(path))
     return { verdict: "system", reason: "installed software · uninstall it with your package manager" };
 
   // Nothing about the name says junk; fall back to how long it has sat there.

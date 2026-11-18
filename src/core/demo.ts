@@ -3,7 +3,7 @@ import { CATEGORIES, type CategoryId } from "./categories";
 import type { Clearable } from "./clean";
 import { MAC_DRIVE, type Drive, type DriveKind } from "./drives";
 import { LOOK_ONLY, type Layout } from "./layout";
-import { IS_MAC } from "./platform";
+import { byOs, IS_MAC } from "./platform";
 import { emptySnapshot, type Item, type ScanHandle, type ScanSnapshot } from "./scan";
 
 /** Made-up disks, for trying the interface without touching the real ones. */
@@ -131,11 +131,13 @@ const WINDOWS: DemoDisk = {
 };
 
 const DISKS: Record<string, DemoDisk> = { [MAC_DRIVE.id]: MAC, "demo-main": LINUX, "demo-games": GAMES, "demo-windows": WINDOWS };
-const disk = (layout: Layout) => DISKS[layout.drive.id] ?? (IS_MAC ? MAC : LINUX);
+/** The demo disk for a drive the demo does not list by name: the main disk of this system. */
+const MAIN = byOs({ mac: MAC, linux: LINUX });
+const disk = (layout: Layout) => DISKS[layout.drive.id] ?? MAIN;
 
 /** A demo drive's size and use, as --drives shows them. */
 export function demoSpace(drive: Drive): { total: number; used: number; available: number } {
-  const { total, sizes } = DISKS[drive.id] ?? (IS_MAC ? MAC : LINUX);
+  const { total, sizes } = DISKS[drive.id] ?? MAIN;
   const used = Object.values(sizes).reduce((a, b) => a + b, 0);
   return { total, used, available: total - used };
 }

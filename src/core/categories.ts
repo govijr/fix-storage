@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { IS_MAC } from "./platform";
+import { byOs } from "./platform";
 
 export type CategoryId =
   | "apps"
@@ -37,9 +37,10 @@ export const CATEGORIES: Category[] = [
     name: "Apps",
     color: [59, 130, 246],
     tier: "review",
-    blurb: IS_MAC
-      ? "Applications and the data they keep."
-      : "Applications and the data they keep: /opt, Flatpak, Snap, ~/.local/share, ~/.config.",
+    blurb: byOs({
+      mac: "Applications and the data they keep.",
+      linux: "Applications and the data they keep: /opt, Flatpak, Snap, ~/.local/share, ~/.config.",
+    }),
   },
   {
     id: "developer",
@@ -51,7 +52,7 @@ export const CATEGORIES: Category[] = [
   { id: "photos", name: "Photos", color: [236, 72, 153], tier: "keep", blurb: "Your pictures and photo libraries." },
   {
     id: "movies",
-    name: IS_MAC ? "Movies" : "Videos",
+    name: byOs({ mac: "Movies", linux: "Videos" }),
     color: [139, 92, 246],
     tier: "keep",
     blurb: "Your videos and video projects.",
@@ -61,9 +62,10 @@ export const CATEGORIES: Category[] = [
     name: "Documents",
     color: [34, 211, 238],
     tier: "review",
-    blurb: IS_MAC
-      ? "Documents, Desktop, Downloads and other folders in your home."
-      : "Documents, Desktop, Downloads, other folders in your home, and loose files on other drives.",
+    blurb: byOs({
+      mac: "Documents, Desktop, Downloads and other folders in your home.",
+      linux: "Documents, Desktop, Downloads, other folders in your home, and loose files on other drives.",
+    }),
   },
   { id: "music", name: "Music", color: [234, 179, 8], tier: "keep", blurb: "Your music and audio projects." },
   {
@@ -71,9 +73,10 @@ export const CATEGORIES: Category[] = [
     name: "System data",
     color: [156, 163, 175],
     tier: "keep",
-    blurb: IS_MAC
-      ? "macOS, logs, snapshots and anything this scan cannot read. The system manages these."
-      : "The system, packages, logs, swap, snapshots and anything this scan cannot read. Your package manager handles these.",
+    blurb: byOs({
+      mac: "macOS, logs, snapshots and anything this scan cannot read. The system manages these.",
+      linux: "The system, packages, logs, swap, snapshots and anything this scan cannot read. Your package manager handles these.",
+    }),
   },
   {
     id: "caches",

@@ -4,7 +4,7 @@ import { basename, join } from "node:path";
 import { CATEGORIES, type CategoryId, type Root } from "./categories";
 import type { Drive } from "./drives";
 import type { Layout } from "./layout";
-import { IS_MAC } from "./platform";
+import { byOs, IS_MAC } from "./platform";
 
 export interface Item {
   path: string;
@@ -67,7 +67,7 @@ export async function diskSpace(drive?: Drive): Promise<Space> {
       const s = await fsp.statfs(path);
       const total = s.blocks * s.bsize;
       const available = s.bavail * s.bsize;
-      return { total, available, used: IS_MAC ? total - available : (s.blocks - s.bfree) * s.bsize };
+      return { total, available, used: byOs({ mac: total - available, linux: (s.blocks - s.bfree) * s.bsize }) };
     } catch {
       // try the next one
     }

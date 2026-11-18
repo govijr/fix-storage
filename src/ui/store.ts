@@ -24,7 +24,7 @@ import { demoDrives, demoLayout, demoPlan, startDemoScan } from "../core/demo";
 import { listDrives, pickDrive, type Drive, type Partition } from "../core/drives";
 import { size, tilde } from "../core/format";
 import { layoutFor, type Layout } from "../core/layout";
-import { FILE_MANAGER, IS_MAC, OS_NAME } from "../core/platform";
+import { byOs, FILE_MANAGER, OS_NAME } from "../core/platform";
 import { diskSpace, emptySnapshot, measure, startScan, type Item, type ScanHandle, type ScanSnapshot } from "../core/scan";
 
 export interface Action {
@@ -515,7 +515,7 @@ export class Store {
     const { layout, selected } = this.state;
     if (!layout) return "Still working out this drive.";
     if (layout.lookOnly) return layout.lookOnly.charAt(0).toUpperCase() + layout.lookOnly.slice(1) + ".";
-    if (selected === "system") return IS_MAC ? "macOS manages System data." : `${OS_NAME} manages System data · the label says how to shrink it.`;
+    if (selected === "system") return byOs({ mac: "macOS manages System data.", linux: `${OS_NAME} manages System data · the label says how to shrink it.` });
     if (this.options.demo) return null;
     return cannotRemove(item.path, layout);
   }

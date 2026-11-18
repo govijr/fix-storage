@@ -7,7 +7,7 @@ import { deletesForGood, type Culprit } from "../core/browse";
 import { classify, shortAge, type Verdict } from "../core/classify";
 import type { Clearable } from "../core/clean";
 import { capacity, gb, size, tilde } from "../core/format";
-import { IS_MAC, REVEAL_LABEL } from "../core/platform";
+import { byOs, IS_LINUX, REVEAL_LABEL } from "../core/platform";
 import type { Item } from "../core/scan";
 import { BAR_ROWS, BarCanvas, HEADROOM_ROWS, type BarModel } from "./bar";
 import { MAX_ROWS, type AppState, type Store } from "./store";
@@ -219,7 +219,7 @@ function DriveTabs({ state, store, fs }: Ctx) {
   if (drives.length <= 1) {
     return (
       <T fs={fs} color={FAINT} style={{ margin: { left: ch(fs, 2) } }}>
-        {drives[0]?.name ?? (IS_MAC ? "Macintosh HD" : "")}
+        {drives[0]?.name ?? byOs({ mac: "Macintosh HD", linux: "" })}
       </T>
     );
   }
@@ -262,7 +262,7 @@ function TopLine(ctx: Ctx) {
     status = (
       <T fs={fs} color={FAINT} style={{ flexShrink: 1, ellipsis: true }}>
         {hidden > 0
-          ? `${hidden} folders unreadable · ${IS_MAC ? "grant Full Disk Access" : "counted as system data"}`
+          ? `${hidden} folders unreadable · ${byOs({ mac: "grant Full Disk Access", linux: "counted as system data" })}`
           : unmounted > 0
             ? `${unmounted} ${unmounted === 1 ? "partition" : "partitions"} not mounted · fix-storage --drives`
             : "scan complete"}
@@ -307,7 +307,7 @@ function Totals({ state, fs }: Ctx) {
       </Box>
       {state.freed > 0 ? (
         <T fs={fs} color={GREEN}>{`${gb(state.freed)} freed this session`}</T>
-      ) : !IS_MAC && state.drives[state.drive] ? (
+      ) : IS_LINUX && state.drives[state.drive] ? (
         <T fs={fs} color={FAINT} style={{ flexShrink: 1, ellipsis: true, margin: { left: ch(fs, 2) } }}>
           {driveDetail(state)}
         </T>
@@ -643,9 +643,10 @@ function Empty({ state, store, fs }: Ctx) {
   else if (state.junkOnly) text = "nothing here looks like junk · f to show everything";
   else if (state.scan.phase === "scanning" && state.stack.length === 0) text = "still measuring…";
   else if (id === "system")
-    text = IS_MAC
-      ? "macOS itself, snapshots, swap and anything this scan could not read. macOS manages it."
-      : "the system itself, reserved space and anything this scan could not read. the system manages it.";
+    text = byOs({
+      mac: "macOS itself, snapshots, swap and anything this scan could not read. macOS manages it.",
+      linux: "the system itself, reserved space and anything this scan could not read. the system manages it.",
+    });
   else if (state.stack.length > 0) text = "empty, or could not be read";
   else if (store.allEntries().length === 0 && state.scan.sizes[id] < 1e6) text = "nothing here";
   else text = "nothing large enough to list";

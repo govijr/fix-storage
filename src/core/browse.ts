@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 import type { CategoryId } from "./categories";
 import { isWhole, type Usage } from "./classify";
 import { homeTrash, type Layout } from "./layout";
-import { IS_MAC, OS_NAME } from "./platform";
+import { IS_LINUX, IS_MAC, OS_NAME } from "./platform";
 import { du, type Item } from "./scan";
 import { forgetTrashInfo, trashLinux } from "./trash";
 
@@ -204,7 +204,7 @@ async function looseFiles(path: string): Promise<Item[]> {
  * otherwise the modification time. Linux has no Spotlight: see statUsage.
  */
 export async function usage(paths: string[]): Promise<Map<string, Usage>> {
-  if (!IS_MAC) return statUsage(paths);
+  if (IS_LINUX) return statUsage(paths);
   const result = new Map<string, Usage>();
   for (let i = 0; i < paths.length; i += 40) {
     const batch = paths.slice(i, i + 40);
@@ -318,7 +318,7 @@ export function demoUsage(path: string, now: number = Date.now()): Usage {
 function protectedPaths(layout: Layout): Set<string> {
   const { home } = layout;
   const shared = [...layout.roots.map((r) => r.path), ...layout.drive.mounts.map((m) => m.point), "/", home];
-  if (!IS_MAC) {
+  if (IS_LINUX) {
     const h = (...parts: string[]) => join(home, ...parts);
     return new Set(
       [
@@ -388,7 +388,7 @@ export function cannotRemove(path: string, layout: Layout): string | null {
   if (protectedPaths(layout).has(target)) return `${OS_NAME} or your account needs this folder.`;
   if (IS_MAC) {
     if (target.startsWith("/System/") || target.startsWith("/private/")) return "macOS manages this.";
-  } else {
+  } else if (IS_LINUX) {
     if (LINUX_MANAGED.some((dir) => target.startsWith(dir + "/"))) return "Linux or a package manager manages this.";
     const flatpak = join(dirname(homeTrash(layout.home)), "flatpak");
     if (target.startsWith(flatpak + "/")) return "Flatpak manages this · use flatpak uninstall.";
@@ -420,7 +420,7 @@ function run(file: string, args: string[]): Promise<void> {
  * the file manager, and returns roughly where it went.
  */
 export async function moveToTrash(path: string, layout: Layout): Promise<string> {
-  if (!IS_MAC) return trashLinux(path, layout.home);
+  if (IS_LINUX) return trashLinux(path, layout.home);
   try {
     await fsp.access("/usr/bin/trash");
     await run("/usr/bin/trash", [path]);
@@ -450,7 +450,7 @@ export function trashPathFor(path: string, layout: Layout): string {
 /** Deletes for good. Only used for caches and things already in the Trash. */
 export async function deleteForGood(path: string, category: CategoryId): Promise<void> {
   await fsp.rm(path, { recursive: true, force: true });
-  if (!IS_MAC && category === "trash") await forgetTrashInfo(path);
+  if (IS_LINUX && category === "trash") await forgetTrashInfo(path);
 }
 
 /**
