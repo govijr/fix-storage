@@ -1,4 +1,4 @@
-import { basename } from "node:path";
+import { basename, sep } from "node:path";
 import { CATEGORIES, CATEGORY, CLEARABLE, type CategoryId } from "../core/categories";
 import { classify, type Label, type Usage } from "../core/classify";
 import {
@@ -24,8 +24,9 @@ import { demoDrives, demoLayout, demoPlan, startDemoScan } from "../core/demo";
 import { listDrives, pickDrive, type Drive, type Partition } from "../core/drives";
 import { size, tilde } from "../core/format";
 import { layoutFor, type Layout } from "../core/layout";
-import { FILE_MANAGER, IS_MAC, OS_NAME } from "../core/platform";
+import { byOs, FILE_MANAGER, OS_NAME, TRASH } from "../core/platform";
 import { diskSpace, emptySnapshot, measure, startScan, type Item, type ScanHandle, type ScanSnapshot } from "../core/scan";
+import { isRecycled } from "../core/windows";
 
 export interface Action {
   id: Clearable;
@@ -515,7 +516,7 @@ export class Store {
     const { layout, selected } = this.state;
     if (!layout) return "Still working out this drive.";
     if (layout.lookOnly) return layout.lookOnly.charAt(0).toUpperCase() + layout.lookOnly.slice(1) + ".";
-    if (selected === "system") return IS_MAC ? "macOS manages System data." : `${OS_NAME} manages System data · the label says how to shrink it.`;
+    if (selected === "system") return byOs({ mac: "macOS manages System data.", linux: `${OS_NAME} manages System data · the label says how to shrink it.`, windows: `${OS_NAME} manages System data · the label says how to shrink it.` });
     if (this.options.demo) return null;
     return cannotRemove(item.path, layout);
   }
@@ -586,7 +587,7 @@ export class Store {
     forgetSizes(item.path);
     const culprits = { ...this.state.culprits };
     for (const path of Object.keys(culprits)) {
-      if (path === item.path || item.path.startsWith(path + "/")) delete culprits[path];
+      if (path === item.path || item.path.startsWith(path + sep)) delete culprits[path];
     }
     this.state = { ...this.state, culprits };
 
@@ -596,7 +597,7 @@ export class Store {
     const sizes = { ...scan.sizes, [category]: Math.max(0, scan.sizes[category] - item.size) };
     const items = { ...scan.items, [category]: drop(scan.items[category]) };
     const shrink = (list: Item[]) =>
-      list.map((i) => (item.path.startsWith(i.path + "/") ? { ...i, size: Math.max(0, i.size - item.size) } : i));
+      list.map((i) => (item.path.startsWith(i.path + sep) ? { ...i, size: Math.max(0, i.size - item.size) } : i));
     items[category] = shrink(items[category]);
     const nextStack = stack.map((level) => ({ ...level, size: Math.max(0, level.size - item.size) }));
 
@@ -610,7 +611,8 @@ export class Store {
     } else {
       // Still on disk, only in the Trash now.
       sizes.trash += item.size;
-      items.trash = [{ path: trashed, size: item.size, dir: item.dir }, ...items.trash].sort((a, b) => b.size - a.size);
+      const origin = isRecycled(trashed) ? item.path : undefined;
+      items.trash = [{ path: trashed, size: item.size, dir: item.dir, origin }, ...items.trash].sort((a, b) => b.size - a.size);
     }
     if (!this.pretend && forGood) {
       const space = await diskSpace(layout.drive);
@@ -621,8 +623,8 @@ export class Store {
     }
 
     const list = stack.length === 0 ? items[category] : drop(children);
-    const verb = forGood ? "Deleted" : "Moved to Trash:";
-    const prefix = this.pretend ? "Dry run, nothing changed. Would have " + (forGood ? "deleted" : "moved to Trash") : verb;
+    const verb = forGood ? "Deleted" : `Moved to ${TRASH}:`;
+    const prefix = this.pretend ? "Dry run, nothing changed. Would have " + (forGood ? "deleted" : `moved to ${TRASH}`) : verb;
     this.set({
       scan: { ...scan, sizes, items, used, available },
       stack: nextStack,
@@ -630,7 +632,7 @@ export class Store {
       row: Math.min(this.state.row, Math.max(0, Math.min(list.length, MAX_ROWS) - 1)),
       removing: null,
       freed,
-      note: `${prefix} ${basename(item.path)} (${size(item.size)}).${forGood || this.pretend ? "" : " Empty the Trash to get the space back."}`,
+      note: `${prefix} ${basename(item.path)} (${size(item.size)}).${forGood || this.pretend ? "" : ` Empty the ${TRASH} to get the space back.`}`,
     });
   }
 

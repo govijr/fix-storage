@@ -8,19 +8,26 @@ const args = process.argv.slice(2);
 const appDir = path.resolve(__dirname, "..");
 
 const linux = process.platform === "linux";
+const windows = process.platform === "win32";
+// Systems with more than one drive to choose from.
+const drives = linux || windows;
 
-const HELP = `fix-storage: see what is filling your ${linux ? "disks" : "Mac's disk"} and clear what is safe to clear.
+const HELP = `fix-storage: see what is filling your ${drives ? "disks" : "Mac's disk"} and clear what is safe to clear.
 
 Usage: fix-storage [options]
 
-  (no options)   Open the interactive view. Needs a terminal with kitty
+  (no options)   Open the interactive view. ${windows
+    ? `The disk meter is drawn as an image in
+                 terminals that show Sixel images (Windows Terminal 1.22 or
+                 newer, WezTerm); others get a simpler one.`
+    : `Needs a terminal with kitty
                  graphics (Ghostty, kitty, iTerm2, WezTerm); other terminals
-                 get a simpler character view.
+                 get a simpler character view.`}
   --dry-run      Interactive view, but clearing only pretends: nothing is deleted.
   --demo         Interactive view on a made-up disk. Reads and deletes nothing.
   --plain        Print a text summary and exit. Deletes nothing.
   --json         Print the summary as JSON and exit. Deletes nothing.
-${linux ? `  --drives       List mounted drives, and partitions that are not mounted, and exit.
+${drives ? `  --drives       List mounted drives, and partitions that are not mounted, and exit.
   --drive <d>    Start on drive <d>: its number from --drives, its name, mount
                  point, label or device, or any path on it.
 ` : ""}  -h, --help     Show this help.
@@ -58,6 +65,9 @@ if (args.includes("--plain") || args.includes("--json") || args.includes("--driv
       process.stderr.write(`fix-storage: ${error && error.message ? error.message : error}\n`);
       process.exit(1);
     });
+} else if (windows) {
+  // pixel has no Windows build; fix-storage draws the same interface itself.
+  require(path.join(appDir, "dist", "main.js"));
 } else {
   const pixel = require.resolve("@zenbu-labs/pixel/package.json", { paths: [appDir] });
   const bin = path.join(path.dirname(pixel), "dist", "bin.js");

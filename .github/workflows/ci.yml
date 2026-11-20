@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest]
+        os: [macos-latest, ubuntu-latest, windows-latest]
         node: [20, 22, 24]
     env:
       # The graphics runtime isn't needed to build or to run the text modes.
@@ -34,9 +34,12 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
       - name: Smoke test the text modes
+        # bash on Windows too (Git Bash), so the commands are the same everywhere.
+        shell: bash
         run: |
           node bin/fix-storage.cjs --help
           node bin/fix-storage.cjs --demo --plain
+          node bin/fix-storage.cjs --demo --drives
           node bin/fix-storage.cjs --demo --json | node -e 'JSON.parse(require("fs").readFileSync(0, "utf8"))'
       - name: Package contents
         run: npm pack --dry-run

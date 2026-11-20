@@ -47,12 +47,17 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@zenbu-labs/pixel": "^0.2.19",
-    "react": "^18.3.1"
+    "react": "^18.3.1",
+    "react-reconciler": "^0.29.2",
+    "yoga-layout": "^3.2.1"
+  },
+  "optionalDependencies": {
+    "@zenbu-labs/pixel": "^0.2.19"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/react": "^18.3.0",
+    "@types/react-reconciler": "^0.28.9",
     "typescript": "^5.5.0"
   },
   "trustedDependencies": [
@@ -66,7 +71,8 @@
   },
   "os": [
     "darwin",
-    "linux"
+    "linux",
+    "win32"
   ],
   "cpu": [
     "arm64",

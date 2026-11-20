@@ -3,7 +3,8 @@ import { CATEGORIES, type CategoryId } from "./categories";
 import type { Clearable } from "./clean";
 import { MAC_DRIVE, type Drive, type DriveKind } from "./drives";
 import { LOOK_ONLY, type Layout } from "./layout";
-import { IS_MAC } from "./platform";
+import { sep } from "node:path";
+import { byOs, IS_MAC, IS_WINDOWS } from "./platform";
 import { emptySnapshot, type Item, type ScanHandle, type ScanSnapshot } from "./scan";
 
 /** Made-up disks, for trying the interface without touching the real ones. */
@@ -130,12 +131,73 @@ const WINDOWS: DemoDisk = {
   },
 };
 
-const DISKS: Record<string, DemoDisk> = { [MAC_DRIVE.id]: MAC, "demo-main": LINUX, "demo-games": GAMES, "demo-windows": WINDOWS };
-const disk = (layout: Layout) => DISKS[layout.drive.id] ?? (IS_MAC ? MAC : LINUX);
+/** Windows counts in powers of two, so the made-up Windows disks do too. */
+const GIB = 2 ** 30;
+
+/** A Windows PC's own drive, as fix-storage sees it running on Windows. */
+const WIN_C: DemoDisk = {
+  total: 476.9 * GIB,
+  sizes: { apps: 71.4 * GIB, developer: 58.2 * GIB, photos: 18.6 * GIB, movies: 27.3 * GIB, documents: 49.8 * GIB, music: 6.1 * GIB, system: 61.5 * GIB, caches: 24.7 * GIB, trash: 9.3 * GIB },
+  paths: {
+    apps: ["C:\\Program Files\\Adobe", "C:\\XboxGames\\Forza Horizon 5", "~\\AppData\\Local\\Programs\\Figma", "~\\AppData\\Roaming\\Slack"],
+    developer: [
+      "~\\AppData\\Local\\Packages\\CanonicalGroupLimited.Ubuntu_79rhkp1fndgsc",
+      "~\\AppData\\Local\\Docker\\wsl",
+      "C:\\Program Files\\Microsoft Visual Studio",
+      "~\\.rustup\\toolchains",
+    ],
+    photos: ["~\\Pictures\\Camera Roll", "~\\OneDrive\\Pictures\\2024"],
+    movies: ["~\\Videos\\Captures", "~\\Videos\\Screen Recordings"],
+    documents: ["~\\Documents\\Projects\\atlas", "~\\Downloads\\installers", "~\\Desktop\\old-projects", "~\\Downloads\\Win11_24H2_English_x64.iso"],
+    music: ["~\\Music\\iTunes", "~\\Music\\FL Studio"],
+    system: ["C:\\Windows", "C:\\pagefile.sys", "C:\\hiberfil.sys", "C:\\System Volume Information", "C:\\Windows.old"],
+    caches: [
+      "~\\AppData\\Local\\Temp",
+      "~\\AppData\\Local\\npm-cache",
+      "~\\AppData\\Local\\Google\\Chrome\\User Data\\Default\\Cache",
+      "~\\AppData\\Local\\pip\\Cache",
+      "~\\AppData\\Local\\D3DSCache",
+      "~\\AppData\\Local\\NVIDIA\\DXCache",
+      "~\\.cache\\huggingface",
+      "~\\AppData\\Local\\CrashDumps",
+    ],
+    // Where they were before they were deleted; the Recycle Bin renames them.
+    trash: ["~\\Downloads\\Old exports", "~\\Documents\\atlas-backup.zip", "~\\Videos\\recording.mp4", "~\\Documents\\Projects\\atlas\\node_modules", "~\\Downloads\\Installers"],
+  },
+};
+
+/** A second drive on the same PC, for games and backups. */
+const WIN_D: DemoDisk = {
+  total: 931.5 * GIB,
+  sizes: { apps: 412.6 * GIB, developer: 0, photos: 0, movies: 96.4 * GIB, documents: 138.2 * GIB, music: 0, system: 0.1 * GIB, caches: 0, trash: 12.8 * GIB },
+  paths: {
+    apps: ["D:\\SteamLibrary\\steamapps\\common", "D:\\Epic Games", "D:\\SteamLibrary\\steamapps\\shadercache"],
+    developer: [],
+    photos: [],
+    movies: ["D:\\Videos\\recordings", "D:\\Videos\\clips"],
+    documents: ["D:\\backups", "D:\\isos", "D:\\old-laptop"],
+    music: [],
+    system: [],
+    caches: [],
+    trash: ["D:\\backups\\2023", "D:\\isos\\ubuntu-22.04.iso"],
+  },
+};
+
+const DISKS: Record<string, DemoDisk> = {
+  [MAC_DRIVE.id]: MAC,
+  "demo-main": LINUX,
+  "demo-games": GAMES,
+  "demo-windows": WINDOWS,
+  "C:": WIN_C,
+  "D:": WIN_D,
+};
+/** The demo disk for a drive the demo does not list by name: the main disk of this system. */
+const MAIN = byOs({ mac: MAC, linux: LINUX, windows: WIN_C });
+const disk = (layout: Layout) => DISKS[layout.drive.id] ?? MAIN;
 
 /** A demo drive's size and use, as --drives shows them. */
 export function demoSpace(drive: Drive): { total: number; used: number; available: number } {
-  const { total, sizes } = DISKS[drive.id] ?? (IS_MAC ? MAC : LINUX);
+  const { total, sizes } = DISKS[drive.id] ?? MAIN;
   const used = Object.values(sizes).reduce((a, b) => a + b, 0);
   return { total, used, available: total - used };
 }
@@ -144,9 +206,16 @@ function demoDrive(id: string, name: string, mount: string, kind: DriveKind, fst
   return { id, name, mount, mounts: [], device: `/dev/demo-${label}`, fstype, label, readOnly: false, kind, home: kind === "main", system: kind === "main" };
 }
 
-/** The demo's drives: one on a Mac, three on Linux so the drive switcher has something to switch. */
+/** The demo's drives: one on a Mac, two on Windows and three on Linux so the drive switcher has something to switch. */
 export function demoDrives(): Drive[] {
   if (IS_MAC) return [MAC_DRIVE];
+  if (IS_WINDOWS) {
+    const letter = (id: string, label: string, main: boolean): Drive => ({
+      id, name: `${label} (${id})`, mount: `${id}\\`, mounts: [], device: "", fstype: "ntfs", label, readOnly: false,
+      kind: main ? "main" : "data", home: main, system: main,
+    });
+    return [letter("C:", "Local Disk", true), letter("D:", "Data", false)];
+  }
   return [
     demoDrive("demo-main", "/", "/", "main", "ext4", "root"),
     demoDrive("demo-games", "/mnt/games", "/mnt/games", "data", "ext4", "games"),
@@ -163,7 +232,7 @@ export function demoLayout(drive: Drive): Layout {
 function split(total: number, paths: string[]): Item[] {
   const weights = paths.map((_, i) => 1 / (i + 1.4));
   const sum = weights.reduce((a, b) => a + b, 0);
-  return paths.map((path, i) => ({ path, size: (total * weights[i]) / sum, dir: !/\.(zip|mov|mkv|dmg|pkg|iso|sys)$/i.test(path) && !/\/swapfile$/.test(path) }));
+  return paths.map((path, i) => ({ path, size: (total * weights[i]) / sum, dir: !/\.(zip|mov|mp4|mkv|dmg|pkg|iso|sys|vhdx|exe|msi)$/i.test(path) && !/\/swapfile$/.test(path) }));
 }
 
 export function demoPlan(category: Clearable, layout: Layout): Item[] {
@@ -171,7 +240,7 @@ export function demoPlan(category: Clearable, layout: Layout): Item[] {
   const items = split(sizes[category], paths[category]);
   // Many small steps so the clearing animation has something to show.
   return items.flatMap((item) =>
-    Array.from({ length: 6 }, (_, i) => ({ path: i === 0 ? item.path : `${item.path}/${i}`, size: item.size / 6 })),
+    Array.from({ length: 6 }, (_, i) => ({ path: i === 0 ? item.path : `${item.path}${sep}${i}`, size: item.size / 6 })),
   );
 }
 
@@ -206,6 +275,7 @@ export function startDemoScan(layout: Layout, onUpdate: (snapshot: ScanSnapshot)
       snap.used = Object.values(sizes).reduce((a, b) => a + b, 0);
       snap.available = total - snap.used;
       for (const category of CATEGORIES) snap.items[category.id] = split(sizes[category.id], paths[category.id]);
+      if (IS_WINDOWS) snap.items.trash = snap.items.trash.map((item, i) => recycled(layout.drive, item, i));
       snap.current = "";
       snap.phase = "done";
       onUpdate({ ...snap, sizes: { ...snap.sizes } });
@@ -219,4 +289,10 @@ export function startDemoScan(layout: Layout, onUpdate: (snapshot: ScanSnapshot)
     },
     done,
   };
+}
+
+/** A demo item as the Recycle Bin keeps it: renamed to $R..., with the path it came from. */
+function recycled(drive: Drive, item: Item, i: number): Item {
+  const code = (0x1a2b3c + i * 7919).toString(36).toUpperCase().slice(0, 6);
+  return { ...item, path: `${drive.mount}$Recycle.Bin${sep}S-1-5-21-0-0-0-1001${sep}$R${code}`, origin: item.path };
 }

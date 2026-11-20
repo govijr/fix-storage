@@ -1,4 +1,4 @@
-import { createRoot } from "@zenbu-labs/pixel";
+import { createRoot } from "./ui/runtime";
 import { driveArg } from "./plain";
 import { App } from "./ui/app";
 import { Store } from "./ui/store";

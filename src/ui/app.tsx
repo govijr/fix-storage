@@ -1,13 +1,12 @@
-import { Box, Text, useRect } from "@zenbu-labs/pixel";
-import type { Color, NodeHandle, Root, Style } from "@zenbu-labs/pixel";
-import { basename, dirname } from "node:path";
+import { Box, Text, useRect, type Color, type NodeHandle, type Root, type Style } from "./runtime";
+import { basename, dirname, sep } from "node:path";
 import { useEffect, useMemo, useRef, useSyncExternalStore, type ReactNode } from "react";
 import { CATEGORIES, CATEGORY, TIER_LABEL, type Category, type CategoryId, type Rgb, type Tier } from "../core/categories";
 import { deletesForGood, type Culprit } from "../core/browse";
 import { classify, shortAge, type Verdict } from "../core/classify";
 import type { Clearable } from "../core/clean";
 import { capacity, gb, size, tilde } from "../core/format";
-import { IS_MAC, REVEAL_LABEL } from "../core/platform";
+import { byOs, DELETE_KEY, MANY_DRIVES, REVEAL_LABEL, TRASH } from "../core/platform";
 import type { Item } from "../core/scan";
 import { BAR_ROWS, BarCanvas, HEADROOM_ROWS, type BarModel } from "./bar";
 import { MAX_ROWS, type AppState, type Store } from "./store";
@@ -40,8 +39,11 @@ const clean = (name: string) => name.replace(/[\u202f\u00a0]/g, " ");
 
 const ACTION = {
   caches: { label: "clear caches", doing: "clearing caches" },
-  trash: { label: "empty trash", doing: "emptying the trash" },
+  trash: { label: `empty ${TRASH.toLowerCase()}`, doing: `emptying the ${TRASH.toLowerCase()}` },
 } as const;
+
+/** Room for the longest action label: 13 for "clear caches", more for "empty recycle bin". */
+const ACTION_WIDTH = Math.max(13, ...Object.values(ACTION).map((a) => a.label.length + 1));
 
 const pct = (part: number, whole: number) => (whole > 0 ? `${Math.round((part / whole) * 100)}%` : "0%");
 const rgba = (c: Rgb, a: number): Color => [c[0], c[1], c[2], Math.round(Math.max(0, Math.min(1, a)) * 255)] as unknown as Color;
@@ -175,12 +177,12 @@ function Meter({ root, store, fs }: { root: Root; store: Store; fs: number }) {
       const moving = canvas.step((now - last) / 1000);
       last = now;
       idle = moving ? 0 : 6;
-    }, 16);
+    }, root.info.frameMs ?? 16);
     return () => {
       clearInterval(timer);
       surface.close();
     };
-  }, [canvas, store, surface]);
+  }, [canvas, store, surface, root]);
 
   return (
     <Box
@@ -219,7 +221,7 @@ function DriveTabs({ state, store, fs }: Ctx) {
   if (drives.length <= 1) {
     return (
       <T fs={fs} color={FAINT} style={{ margin: { left: ch(fs, 2) } }}>
-        {drives[0]?.name ?? (IS_MAC ? "Macintosh HD" : "")}
+        {drives[0]?.name ?? byOs({ mac: "Macintosh HD", linux: "", windows: "" })}
       </T>
     );
   }
@@ -262,7 +264,7 @@ function TopLine(ctx: Ctx) {
     status = (
       <T fs={fs} color={FAINT} style={{ flexShrink: 1, ellipsis: true }}>
         {hidden > 0
-          ? `${hidden} folders unreadable · ${IS_MAC ? "grant Full Disk Access" : "counted as system data"}`
+          ? `${hidden} folders unreadable · ${byOs({ mac: "grant Full Disk Access", linux: "counted as system data", windows: "counted as system data" })}`
           : unmounted > 0
             ? `${unmounted} ${unmounted === 1 ? "partition" : "partitions"} not mounted · fix-storage --drives`
             : "scan complete"}
@@ -307,7 +309,7 @@ function Totals({ state, fs }: Ctx) {
       </Box>
       {state.freed > 0 ? (
         <T fs={fs} color={GREEN}>{`${gb(state.freed)} freed this session`}</T>
-      ) : !IS_MAC && state.drives[state.drive] ? (
+      ) : MANY_DRIVES && state.drives[state.drive] ? (
         <T fs={fs} color={FAINT} style={{ flexShrink: 1, ellipsis: true, margin: { left: ch(fs, 2) } }}>
           {driveDetail(state)}
         </T>
@@ -385,7 +387,7 @@ function QuickWins({ state, store, fs }: Ctx) {
               <T fs={fs} color={RED} onClick={() => store.press(id)}>{`delete ${gb(state.scan.sizes[id])} for good? press again`}</T>
             ) : (
               <Box style={{ pointerShape: busy ? "default" : "pointer" }} onClick={busy ? undefined : () => store.press(id)}>
-                <T fs={fs} color={busy ? FAINT : MUTED} style={{ width: ch(fs, 13) }}>{ACTION[id].label}</T>
+                <T fs={fs} color={busy ? FAINT : MUTED} style={{ width: ch(fs, ACTION_WIDTH) }}>{ACTION[id].label}</T>
                 <T fs={fs} color={busy ? FAINT : MUTED}>{gb(state.scan.sizes[id]).padStart(9)}</T>
               </Box>
             )}
@@ -511,7 +513,7 @@ function Reclaimable({ state, store, fs }: Ctx) {
 const DOTS = 16;
 
 /** Path of `path` relative to the folder `from`, e.g. "a/b/model.bin". */
-const relative = (from: string, path: string) => (path.startsWith(from + "/") ? path.slice(from.length + 1) : path);
+const relative = (from: string, path: string) => (path.startsWith(from + sep) ? path.slice(from.length + 1) : path);
 
 /** Is a culprit worth printing under its folder without being asked? */
 function telling(item: Item, culprit: Culprit | "pending" | undefined): culprit is Culprit {
@@ -528,7 +530,9 @@ function ItemLine({ item, index, max, rowRef, ...ctx }: Ctx & { item: Item; inde
   const label = store.label(item);
   const verdict = VERDICT[label.verdict];
   const used = state.usage[item.path];
-  const name = clean(basename(item.path) || item.path);
+  // A recycled item is shown by the name and folder it had before it was deleted.
+  const shown = item.origin ?? item.path;
+  const name = clean(basename(shown) || shown);
   return (
     <Box
       ref={rowRef}
@@ -541,10 +545,10 @@ function ItemLine({ item, index, max, rowRef, ...ctx }: Ctx & { item: Item; inde
       <T fs={fs} color={item.dir ? category.color : FAINT} style={{ width: ch(fs, 1) }}>{item.dir ? "▸" : ""}</T>
       <Box style={{ flexGrow: 1, flexShrink: 1, minWidth: 0, overflow: "hidden" }}>
         <T fs={fs} color={state.removing === item.path ? FAINT : selected ? FG : "#b5b5b5"} bold={selected} style={{ flexShrink: 1, ellipsis: true }}>
-          {name + (item.dir ? "/" : "")}
+          {name + (item.dir ? sep : "")}
         </T>
         {state.stack.length === 0 ? (
-          <T fs={fs} color={FAINT} style={{ flexShrink: 2, ellipsis: true, margin: { left: ch(fs, 2) } }}>{tilde(dirname(item.path))}</T>
+          <T fs={fs} color={FAINT} style={{ flexShrink: 2, ellipsis: true, margin: { left: ch(fs, 2) } }}>{tilde(dirname(shown))}</T>
         ) : null}
       </Box>
       <T fs={fs} color={verdict.text} style={{ width: ch(fs, 6) }}>{verdict.tag}</T>
@@ -563,7 +567,7 @@ function CulpritLine({ item, culprit, fs, color, category }: { item: Item; culpr
   return (
     <Box style={{ alignItems: "center", height: fs * 1.45, flexShrink: 0, padding: { left: ch(fs, 4) }, overflow: "hidden" }}>
       <T fs={fs} color={FAINT} style={{ margin: { right: ch(fs, 1) } }}>└ mostly in</T>
-      <T fs={fs} color={color} style={{ flexShrink: 1, ellipsis: true }}>{clean(relative(item.path, last.path)) + (last.dir ? "/" : "")}</T>
+      <T fs={fs} color={color} style={{ flexShrink: 1, ellipsis: true }}>{clean(relative(item.path, last.path)) + (last.dir ? sep : "")}</T>
       <T fs={fs} color={MUTED} style={{ margin: { left: ch(fs, 2) } }}>{size(last.size)}</T>
       <T fs={fs} color={FAINT} style={{ margin: { left: ch(fs, 1) } }}>{`· ${pct(last.size, item.size)}`}</T>
       {VERDICT[verdict].tag && verdict !== "yours" ? (
@@ -613,7 +617,7 @@ function ItemDetails({ item, index, ...ctx }: Ctx & { item: Item; index: number 
 
       <Box style={{ ...line, ...indent, gap: ch(fs, 3) }}>
         {removing ? (
-          <T fs={fs} color={MUTED}>{forGood ? "deleting…" : "moving to trash…"}</T>
+          <T fs={fs} color={MUTED}>{forGood ? "deleting…" : `moving to ${TRASH.toLowerCase()}…`}</T>
         ) : (
           <>
             {item.dir ? <Hint fs={fs} k="→" label="open" onClick={() => store.open(index)} /> : null}
@@ -621,12 +625,12 @@ function ItemDetails({ item, index, ...ctx }: Ctx & { item: Item; index: number 
             <Hint fs={fs} k="o" label={REVEAL_LABEL} onClick={() => void store.reveal(index)} />
             {state.selected === "system" ? null : armed ? (
               <T fs={fs} color={RED} bold onClick={() => store.removeItem(index)}>
-                {forGood ? `⌫ again to delete ${size(item.size)} for good` : `⌫ again to move ${size(item.size)} to trash`}
+                {forGood ? `${DELETE_KEY} again to delete ${size(item.size)} for good` : `${DELETE_KEY} again to move ${size(item.size)} to ${TRASH.toLowerCase()}`}
               </T>
             ) : blocked ? (
               <T fs={fs} color={FAINT}>{`can't remove: ${blocked.toLowerCase()}`}</T>
             ) : (
-              <Hint fs={fs} k="⌫" label={forGood ? "delete" : "move to trash"} keyColor={RED} onClick={() => store.removeItem(index)} />
+              <Hint fs={fs} k={DELETE_KEY} label={forGood ? "delete" : `move to ${TRASH.toLowerCase()}`} keyColor={RED} onClick={() => store.removeItem(index)} />
             )}
           </>
         )}
@@ -643,9 +647,11 @@ function Empty({ state, store, fs }: Ctx) {
   else if (state.junkOnly) text = "nothing here looks like junk · f to show everything";
   else if (state.scan.phase === "scanning" && state.stack.length === 0) text = "still measuring…";
   else if (id === "system")
-    text = IS_MAC
-      ? "macOS itself, snapshots, swap and anything this scan could not read. macOS manages it."
-      : "the system itself, reserved space and anything this scan could not read. the system manages it.";
+    text = byOs({
+      mac: "macOS itself, snapshots, swap and anything this scan could not read. macOS manages it.",
+      linux: "the system itself, reserved space and anything this scan could not read. the system manages it.",
+      windows: "windows itself, the page file, restore points and anything this scan could not read. windows manages it.",
+    });
   else if (state.stack.length > 0) text = "empty, or could not be read";
   else if (store.allEntries().length === 0 && state.scan.sizes[id] < 1e6) text = "nothing here";
   else text = "nothing large enough to list";
@@ -705,7 +711,7 @@ function Inside(ctx: Ctx) {
 function BottomLine({ state, fs }: Ctx) {
   const keys: Array<[string, string]> =
     state.pane === "list"
-      ? [["↑↓", "move"], ["→", "open"], ["←", "back"], ["g", "culprit"], ["f", "junk only"], ["o", "reveal"], ["⌫", "remove"], ["q", "quit"]]
+      ? [["↑↓", "move"], ["→", "open"], ["←", "back"], ["g", "culprit"], ["f", "junk only"], ["o", "reveal"], [DELETE_KEY, "remove"], ["q", "quit"]]
       : [["↑↓", "category"], ["→", "look inside"], ["f", "junk only"], ["c", "clear"], ...(state.drives.length > 1 ? [["v", "drive"] as [string, string]] : []), ["r", "rescan"], ["q", "quit"]];
   return (
     <Box style={{ justifyContent: "space-between", gap: fs * 2, flexShrink: 0 }}>

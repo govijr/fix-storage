@@ -1,13 +1,15 @@
-import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promises as fsp } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { CategoryId } from "./categories";
 import { isWhole, type Usage } from "./classify";
 import { homeTrash, type Layout } from "./layout";
-import { IS_MAC, OS_NAME } from "./platform";
-import { du, type Item } from "./scan";
+import { IS_LINUX, IS_MAC, IS_WINDOWS, OS_NAME } from "./platform";
+import { du, startDu, type Item } from "./scan";
+import type { DuProcess } from "./windu-server";
 import { forgetTrashInfo, trashLinux } from "./trash";
+import { forgetRecord, originalPath, recycle } from "./windows";
 
 export interface ListHandle {
   cancel(): void;
@@ -22,7 +24,7 @@ const known = new Map<string, number>();
 /** Drops remembered sizes for a path, everything inside it, and every folder above it. */
 export function forgetSizes(path: string) {
   for (const key of known.keys()) {
-    if (key === path || key.startsWith(path + "/") || path.startsWith(key + "/")) known.delete(key);
+    if (key === path || key.startsWith(path + sep) || path.startsWith(key + sep)) known.delete(key);
   }
 }
 
@@ -41,7 +43,7 @@ export function listFolder(
   onUpdate: (items: Item[], done: boolean, current: string) => void,
   foreign: (path: string) => boolean = () => false,
 ): ListHandle {
-  const children = new Set<ChildProcess>();
+  const children = new Set<DuProcess>();
   let cancelled = false;
   const items: Item[] = [];
   const sorted = () => [...items].sort((a, b) => b.size - a.size);
@@ -115,7 +117,7 @@ const DEPTH = 12;
  */
 export function findCulprit(path: string, onDone: (culprit: Culprit) => void): ListHandle {
   let cancelled = false;
-  const child = spawn("du", ["-kx", "-d", String(DEPTH), path], { stdio: ["ignore", "pipe", "ignore"] });
+  let child: DuProcess | null = null;
   const sizes = new Map<string, number>();
   const kids = new Map<string, Item[]>();
   let buffer = "";
@@ -133,12 +135,6 @@ export function findCulprit(path: string, onDone: (culprit: Culprit) => void): L
     list.push({ path: dir, size: bytes, dir: true });
     kids.set(parent, list);
   };
-  child.stdout.on("data", (chunk: Buffer) => {
-    buffer += chunk.toString();
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
-    for (const line of lines) take(line);
-  });
 
   const finish = async () => {
     if (cancelled) return;
@@ -166,13 +162,25 @@ export function findCulprit(path: string, onDone: (culprit: Culprit) => void): L
     const top = [...(kids.get(path) ?? []), ...(await looseFiles(path))].sort((a, b) => b.size - a.size).slice(0, 3);
     if (!cancelled) onDone({ chain, top });
   };
-  child.on("close", () => void finish());
-  child.on("error", () => void finish());
+  void startDu(["-d", String(DEPTH)], path).then((started) => {
+    if (cancelled) return started.kill();
+    child = started;
+    child.stdout.on("data", (chunk: Buffer) => {
+      buffer += chunk.toString();
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) take(line);
+    });
+    // Unread errors would fill the pipe and stall du.
+    child.stderr.resume();
+    child.on("close", () => void finish());
+    child.on("error", () => void finish());
+  });
 
   return {
     cancel() {
       cancelled = true;
-      child.kill();
+      child?.kill();
     },
   };
 }
@@ -204,7 +212,7 @@ async function looseFiles(path: string): Promise<Item[]> {
  * otherwise the modification time. Linux has no Spotlight: see statUsage.
  */
 export async function usage(paths: string[]): Promise<Map<string, Usage>> {
-  if (!IS_MAC) return statUsage(paths);
+  if (IS_LINUX || IS_WINDOWS) return statUsage(paths);
   const result = new Map<string, Usage>();
   for (let i = 0; i < paths.length; i += 40) {
     const batch = paths.slice(i, i + 40);
@@ -233,7 +241,7 @@ export async function usage(paths: string[]): Promise<Map<string, Usage>> {
 }
 
 /**
- * Linux: a file's access time when it is newer than its modification time,
+ * Linux and Windows: a file's access time when it is newer than its modification time,
  * which means it was opened since it last changed (with the default relatime
  * mount option, to within a day). Folders use their modification time: every
  * du pass reads them, so their access times say nothing.
@@ -253,6 +261,19 @@ async function statUsage(paths: string[]): Promise<Map<string, Usage>> {
 }
 
 // ---- demo --------------------------------------------------------------
+
+/** What a demo folder holds on Windows, where Mac names like Info.plist would look out of place. */
+const WINDOWS_DEMO_NAMES: Partial<Record<CategoryId, string[]>> = {
+  apps: ["resources", "locales", "app-1.4.2", "bin", "plugins", "data", "Update.exe", "unins000.exe"],
+  developer: ["LocalState", "disk", "toolchains", "node_modules", "VC", ".venv", "obj", "build.log"],
+  photos: ["2024", "2023", "Screenshots", "Camera Roll", "Saved Pictures", "edits"],
+  movies: ["Captures", "Screen Recordings", "Exports", "Proxy Media", "Final.mp4", "Draft 2.mp4"],
+  documents: ["node_modules", "renders", ".next", "Screen Recording 2025-03-02 133729.mp4", "Figma-Setup.exe", "2024", "Archive.zip", "notes.md"],
+  music: ["iTunes Media", "Projects", "Samples", "Bounces", "Playlists", "Library.xml"],
+  caches: ["Cache_Data", "index", "js", "wasm", "tmp", "data_0", "f_000123", "Cache.db"],
+  trash: ["exports", "renders", "build", "old", "backup.zip", "recording.mp4", "data.sqlite"],
+  system: ["WinSxS", "System32", "SysWOW64", "Installer", "assembly", "Logs"],
+};
 
 const DEMO_NAMES: Partial<Record<CategoryId, string[]>> = {
   apps: ["Contents", "Frameworks", "Resources", "PlugIns", "Helpers", "SharedSupport", "Library", "Info.plist"],
@@ -274,7 +295,8 @@ function hash(text: string): number {
 
 /** Made-up contents for a demo folder, so the drill-down has something to show. */
 export function demoChildren(category: CategoryId, path: string, size: number, depth: number): Item[] {
-  const pool = DEMO_NAMES[category] ?? DEMO_NAMES.documents!;
+  const pools = IS_WINDOWS ? WINDOWS_DEMO_NAMES : DEMO_NAMES;
+  const pool = pools[category] ?? pools.documents!;
   const count = 4 + Math.floor(hash(path) * (pool.length - 3));
   const start = Math.floor(hash(path + "#") * pool.length);
   const names = Array.from({ length: count }, (_, i) => pool[(start + i) % pool.length]);
@@ -284,7 +306,7 @@ export function demoChildren(category: CategoryId, path: string, size: number, d
   const sum = weights.reduce((a, b) => a + b, 0);
   return names
     .map((name, i) => ({
-      path: `${path}/${name}`,
+      path: `${path}${sep}${name}`,
       size: (size * weights[i]) / sum,
       dir: depth < 7 && !/\.[a-z0-9]+$/i.test(name),
     }))
@@ -318,7 +340,8 @@ export function demoUsage(path: string, now: number = Date.now()): Usage {
 function protectedPaths(layout: Layout): Set<string> {
   const { home } = layout;
   const shared = [...layout.roots.map((r) => r.path), ...layout.drive.mounts.map((m) => m.point), "/", home];
-  if (!IS_MAC) {
+  if (IS_WINDOWS) return new Set([...shared, ...windowsProtected(layout)].map((p) => resolve(p).toLowerCase()));
+  if (IS_LINUX) {
     const h = (...parts: string[]) => join(home, ...parts);
     return new Set(
       [
@@ -379,22 +402,122 @@ const LINUX_MANAGED = [
   "/proc", "/sys", "/dev", "/snap", "/nix", "/.snapshots", "/timeshift", "/swapfile", "/swap", "/home/linuxbrew",
 ];
 
+/** Windows folders whose removal would break Windows or the account, whatever is inside. */
+function windowsProtected(layout: Layout): string[] {
+  const { home, drive } = layout;
+  const t = (...parts: string[]) => join(drive.mount, ...parts);
+  const h = (...parts: string[]) => join(home, ...parts);
+  const local = process.env.LOCALAPPDATA ?? h("AppData", "Local");
+  const roaming = process.env.APPDATA ?? h("AppData", "Roaming");
+  return [
+    drive.mount,
+    t("Windows"),
+    t("Program Files"),
+    t("Program Files (x86)"),
+    t("ProgramData"),
+    t("Users"),
+    home,
+    h("AppData"),
+    h("AppData", "LocalLow"),
+    local,
+    roaming,
+    join(local, "Microsoft"),
+    join(roaming, "Microsoft"),
+    join(local, "Programs"),
+    join(local, "Packages"),
+    h("NTUSER.DAT"),
+    h(".ssh"),
+    h(".gnupg"),
+    join(local, "Google", "Chrome", "User Data"),
+    join(local, "Microsoft", "Edge", "User Data"),
+    join(local, "BraveSoftware", "Brave-Browser", "User Data"),
+    join(roaming, "Mozilla", "Firefox"),
+  ];
+}
+
+/** Windows folders where nothing inside may be removed by hand, and why. */
+function windowsManaged(layout: Layout): { managed: string[]; secrets: string[]; installed: string[] } {
+  const { home, drive } = layout;
+  const t = (...parts: string[]) => join(drive.mount, ...parts);
+  const local = process.env.LOCALAPPDATA ?? join(home, "AppData", "Local");
+  const roaming = process.env.APPDATA ?? join(home, "AppData", "Roaming");
+  return {
+    managed: [
+      t("Windows"),
+      t("Program Files", "WindowsApps"),
+      t("ProgramData", "Microsoft"),
+      t("System Volume Information"),
+      t("Recovery"),
+      t("$WinREAgent"),
+      t("$Windows.~BT"),
+      t("$Windows.~WS"),
+      t("Windows.old"),
+      t("Boot"),
+      t("EFI"),
+    ],
+    secrets: [
+      join(roaming, "Microsoft", "Credentials"),
+      join(roaming, "Microsoft", "Protect"),
+      join(roaming, "Microsoft", "Crypto"),
+      join(roaming, "Microsoft", "SystemCertificates"),
+      join(roaming, "Microsoft", "Vault"),
+      join(local, "Microsoft", "Credentials"),
+      join(local, "Microsoft", "Vault"),
+      join(home, ".ssh"),
+      join(home, ".gnupg"),
+    ],
+    installed: [t("Program Files"), t("Program Files (x86)"), join(local, "Programs"), join(local, "Packages")],
+  };
+}
+
+/** After recycling, the $R... item Windows made for a path, from the newest record that names it. */
+async function findRecycled(path: string, layout: Layout): Promise<string | null> {
+  const bin = layout.roots.find((root) => root.category === "trash")?.path;
+  if (!bin) return null;
+  let names: string[];
+  try {
+    names = await fsp.readdir(bin);
+  } catch {
+    return null;
+  }
+  const wanted = resolve(path).toLowerCase();
+  let best: { path: string; at: number } | null = null;
+  for (const name of names) {
+    if (!/^\$R/i.test(name)) continue;
+    const recycled = join(bin, name);
+    if ((await originalPath(recycled))?.toLowerCase() !== wanted) continue;
+    const at = (await fsp.lstat(recycled).catch(() => null))?.ctimeMs ?? 0;
+    if (!best || at > best.at) best = { path: recycled, at };
+  }
+  return best?.path ?? null;
+}
+
 /** Why an item cannot be removed, or null when it can. */
 export function cannotRemove(path: string, layout: Layout): string | null {
-  if (!path.startsWith("/")) return "Not a real path.";
+  // On Windows only a path on a drive letter: a network path has no Recycle Bin.
+  if (IS_WINDOWS ? !/^[a-z]:\\/i.test(path) : !path.startsWith("/")) return "Not a real path.";
   if (layout.lookOnly) return capitalize(layout.lookOnly) + ".";
   // Judge a second view of a folder (a bind mount) by the folder it shows.
   const target = layout.canonical(resolve(path));
-  if (protectedPaths(layout).has(target)) return `${OS_NAME} or your account needs this folder.`;
+  // Windows paths match whatever their case.
+  const key = IS_WINDOWS ? target.toLowerCase() : target;
+  if (protectedPaths(layout).has(key)) return `${OS_NAME} or your account needs this folder.`;
   if (IS_MAC) {
     if (target.startsWith("/System/") || target.startsWith("/private/")) return "macOS manages this.";
-  } else {
+  } else if (IS_LINUX) {
     if (LINUX_MANAGED.some((dir) => target.startsWith(dir + "/"))) return "Linux or a package manager manages this.";
     const flatpak = join(dirname(homeTrash(layout.home)), "flatpak");
     if (target.startsWith(flatpak + "/")) return "Flatpak manages this · use flatpak uninstall.";
     if (layout.foreign(target)) return "Another drive is mounted here.";
+  } else if (IS_WINDOWS) {
+    const within = (dirs: string[]) => dirs.some((dir) => key.startsWith(resolve(dir).toLowerCase() + sep));
+    const { managed, secrets, installed } = windowsManaged(layout);
+    if (within(managed)) return "Windows manages this.";
+    if (within(secrets)) return "Windows keeps your passwords and keys here.";
+    if (within(installed)) return "Installed with the app · uninstall it in Settings › Apps instead.";
   }
-  const known = layout.roots.some((root) => target.startsWith(resolve(root.path) + sep));
+  const fold = (p: string) => (IS_WINDOWS ? p.toLowerCase() : p);
+  const known = layout.roots.some((root) => key.startsWith(fold(resolve(root.path)) + sep));
   if (!known) return "Outside the folders this tool looks at.";
   return null;
 }
@@ -420,7 +543,11 @@ function run(file: string, args: string[]): Promise<void> {
  * the file manager, and returns roughly where it went.
  */
 export async function moveToTrash(path: string, layout: Layout): Promise<string> {
-  if (!IS_MAC) return trashLinux(path, layout.home);
+  if (IS_LINUX) return trashLinux(path, layout.home);
+  if (IS_WINDOWS) {
+    await recycle(path);
+    return (await findRecycled(path, layout)) ?? trashPathFor(path, layout);
+  }
   try {
     await fsp.access("/usr/bin/trash");
     await run("/usr/bin/trash", [path]);
@@ -442,6 +569,10 @@ export async function moveToTrash(path: string, layout: Layout): Promise<string>
 /** Where moving an item to the Trash puts it, near enough to list it there (and for dry runs). */
 export function trashPathFor(path: string, layout: Layout): string {
   if (IS_MAC) return join(layout.home, ".Trash", basename(path));
+  if (IS_WINDOWS) {
+    const bin = layout.roots.find((root) => root.category === "trash");
+    return join(bin?.path ?? dirname(path), basename(path));
+  }
   if (layout.drive.home) return join(homeTrash(layout.home), "files", basename(path));
   const uid = typeof process.getuid === "function" ? process.getuid() : 0;
   return join(layout.drive.mount, `.Trash-${uid}`, "files", basename(path));
@@ -450,7 +581,8 @@ export function trashPathFor(path: string, layout: Layout): string {
 /** Deletes for good. Only used for caches and things already in the Trash. */
 export async function deleteForGood(path: string, category: CategoryId): Promise<void> {
   await fsp.rm(path, { recursive: true, force: true });
-  if (!IS_MAC && category === "trash") await forgetTrashInfo(path);
+  if (IS_LINUX && category === "trash") await forgetTrashInfo(path);
+  if (IS_WINDOWS && category === "trash") await forgetRecord(path);
 }
 
 /**
@@ -459,6 +591,18 @@ export async function deleteForGood(path: string, category: CategoryId): Promise
  */
 export async function reveal(path: string): Promise<void> {
   if (IS_MAC) return run("open", ["-R", path]);
+  if (IS_WINDOWS) {
+    // Explorer exits with 1 even when it worked, so only a failure to start counts.
+    // Windows paths cannot contain quotes, so quoting the path here is safe.
+    return new Promise((done, fail) => {
+      const child = spawn("explorer.exe", [`/select,"${path}"`], { detached: true, stdio: "ignore", windowsVerbatimArguments: true });
+      child.on("error", fail);
+      child.on("spawn", () => {
+        child.unref();
+        done();
+      });
+    });
+  }
   const uri = pathToFileURL(path).href.replace(/,/g, "%2C");
   try {
     await run("dbus-send", [

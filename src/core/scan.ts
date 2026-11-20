@@ -1,16 +1,20 @@
-import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promises as fsp } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, join, sep } from "node:path";
 import { CATEGORIES, type CategoryId, type Root } from "./categories";
 import type { Drive } from "./drives";
 import type { Layout } from "./layout";
-import { IS_MAC } from "./platform";
+import { byOs, IS_MAC, IS_WINDOWS } from "./platform";
+import { isRecycled, originalPath } from "./windows";
+import { measureFolder, type DuProcess } from "./windu-server";
 
 export interface Item {
   path: string;
   size: number;
   /** True for folders, which can be opened for a closer look. */
   dir?: boolean;
+  /** Where it was before it was deleted, for an item in the Windows Recycle Bin, which renames everything to $R.... */
+  origin?: string;
 }
 
 export interface ScanSnapshot {
@@ -67,7 +71,7 @@ export async function diskSpace(drive?: Drive): Promise<Space> {
       const s = await fsp.statfs(path);
       const total = s.blocks * s.bsize;
       const available = s.bavail * s.bsize;
-      return { total, available, used: IS_MAC ? total - available : (s.blocks - s.bfree) * s.bsize };
+      return { total, available, used: byOs({ mac: total - available, linux: (s.blocks - s.bfree) * s.bsize, windows: (s.blocks - s.bfree) * s.bsize }) };
     } catch {
       // try the next one
     }
@@ -87,10 +91,24 @@ interface DuResult {
   denied: boolean;
 }
 
+/**
+ * Starts du on a folder with these options ("-s", or "-d <n>"): the system's
+ * own, or on Windows, which has none, fix-storage's: the fast one in
+ * windu-server.ts, or windu.js where that cannot run. They all print the same.
+ */
+export async function startDu(options: string[], path: string): Promise<DuProcess> {
+  if (IS_WINDOWS) {
+    const fast = await measureFolder(path, options[0] === "-d" ? Number(options[1]) : 0);
+    if (fast) return fast;
+  }
+  const [file, args] = IS_WINDOWS ? [process.execPath, [join(__dirname, "windu.js"), ...options, path]] : ["du", ["-k", "-x", ...options, path]];
+  return spawn(file, args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true }) as unknown as DuProcess;
+}
+
 /** Disk usage of one folder via du, which is far faster than walking it in JS. */
-export function du(path: string, children: Set<ChildProcess>): Promise<DuResult> {
+export async function du(path: string, children: Set<DuProcess>): Promise<DuResult> {
+  const child = await startDu(["-s"], path);
   return new Promise((resolve) => {
-    const child = spawn("du", ["-skx", path], { stdio: ["ignore", "pipe", "pipe"] });
     children.add(child);
     let out = "";
     let err = "";
@@ -150,7 +168,7 @@ export function startScan(layout: Layout, onUpdate: (snapshot: ScanSnapshot) => 
   const throttleMs = options.throttleMs ?? 40;
 
   const snap = emptySnapshot();
-  const children = new Set<ChildProcess>();
+  const children = new Set<DuProcess>();
   let cancelled = false;
   let lastEmit = 0;
 
@@ -174,7 +192,7 @@ export function startScan(layout: Layout, onUpdate: (snapshot: ScanSnapshot) => 
     const all = layout.roots;
     const rootPaths = new Set(all.map((r) => r.path));
     const holdsRoot = (path: string) => {
-      const prefix = path + "/";
+      const prefix = path + sep;
       return all.some((r) => r.path.startsWith(prefix));
     };
 
@@ -195,7 +213,11 @@ export function startScan(layout: Layout, onUpdate: (snapshot: ScanSnapshot) => 
     };
 
     // Unreadable system folders are expected; they count as System data anyway.
+    // So are, on Windows, folders it locks for everyone (WindowsApps, a service's
+    // ProgramData): only unreadable folders in your own home are worth a mention.
+    const home = layout.home.toLowerCase() + sep;
     const report = (path: string, category: CategoryId) => {
+      if (IS_WINDOWS && !path.toLowerCase().startsWith(home)) return;
       if (category !== "system" && basename(path) !== "lost+found") snap.blocked.push(path);
     };
 
@@ -248,6 +270,7 @@ export function startScan(layout: Layout, onUpdate: (snapshot: ScanSnapshot) => 
     await Promise.all(Array.from({ length: concurrency }, worker));
 
     for (const list of Object.values(snap.items)) list.sort((a, b) => b.size - a.size);
+    if (IS_WINDOWS) await nameRecycled(snap.items.trash);
 
     // Whatever the disk reports as used beyond what was measured is the
     // system's: the OS itself, snapshots, swap, and folders this process may
@@ -257,8 +280,16 @@ export function startScan(layout: Layout, onUpdate: (snapshot: ScanSnapshot) => 
       snap.total = after.total;
       snap.available = after.available;
       const others = snap.used - snap.sizes.system;
-      snap.sizes.system = Math.max(snap.sizes.system, after.used - others);
-      snap.used = Math.max(after.used, snap.used);
+      if (IS_WINDOWS) {
+        // Windows' own folders share many files through hard links (WinSxS and
+        // System32), and folders measured apart count such a file in each, so
+        // their sum overstates System data; what the disk says is used does not.
+        snap.sizes.system = Math.max(0, after.used - others);
+        snap.used = Math.max(after.used, others);
+      } else {
+        snap.sizes.system = Math.max(snap.sizes.system, after.used - others);
+        snap.used = Math.max(after.used, snap.used);
+      }
     }
     snap.current = "";
     snap.phase = "done";
@@ -277,11 +308,18 @@ export function startScan(layout: Layout, onUpdate: (snapshot: ScanSnapshot) => 
 
 /** Re-measures one category after something was deleted from it. */
 export async function measure(category: CategoryId, layout: Layout): Promise<number> {
-  const children = new Set<ChildProcess>();
+  const children = new Set<DuProcess>();
   let total = 0;
   for (const root of layout.roots) {
     if (root.category !== category) continue;
     total += (await du(root.path, children)).bytes;
   }
   return total;
+}
+
+/** Gives each item in the Recycle Bin the path it had before it was deleted. */
+export async function nameRecycled(items: Item[]): Promise<void> {
+  for (const item of items) {
+    if (!item.origin && isRecycled(item.path)) item.origin = (await originalPath(item.path)) ?? undefined;
+  }
 }

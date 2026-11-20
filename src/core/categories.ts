@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { IS_MAC } from "./platform";
+import { byOs, TRASH } from "./platform";
 
 export type CategoryId =
   | "apps"
@@ -37,9 +37,11 @@ export const CATEGORIES: Category[] = [
     name: "Apps",
     color: [59, 130, 246],
     tier: "review",
-    blurb: IS_MAC
-      ? "Applications and the data they keep."
-      : "Applications and the data they keep: /opt, Flatpak, Snap, ~/.local/share, ~/.config.",
+    blurb: byOs({
+      mac: "Applications and the data they keep.",
+      linux: "Applications and the data they keep: /opt, Flatpak, Snap, ~/.local/share, ~/.config.",
+      windows: "Programs, Store apps and the data they keep in AppData.",
+    }),
   },
   {
     id: "developer",
@@ -51,7 +53,7 @@ export const CATEGORIES: Category[] = [
   { id: "photos", name: "Photos", color: [236, 72, 153], tier: "keep", blurb: "Your pictures and photo libraries." },
   {
     id: "movies",
-    name: IS_MAC ? "Movies" : "Videos",
+    name: byOs({ mac: "Movies", linux: "Videos", windows: "Videos" }),
     color: [139, 92, 246],
     tier: "keep",
     blurb: "Your videos and video projects.",
@@ -61,9 +63,11 @@ export const CATEGORIES: Category[] = [
     name: "Documents",
     color: [34, 211, 238],
     tier: "review",
-    blurb: IS_MAC
-      ? "Documents, Desktop, Downloads and other folders in your home."
-      : "Documents, Desktop, Downloads, other folders in your home, and loose files on other drives.",
+    blurb: byOs({
+      mac: "Documents, Desktop, Downloads and other folders in your home.",
+      linux: "Documents, Desktop, Downloads, other folders in your home, and loose files on other drives.",
+      windows: "Documents, Desktop, Downloads, OneDrive, other folders in your home, and files on other drives.",
+    }),
   },
   { id: "music", name: "Music", color: [234, 179, 8], tier: "keep", blurb: "Your music and audio projects." },
   {
@@ -71,9 +75,11 @@ export const CATEGORIES: Category[] = [
     name: "System data",
     color: [156, 163, 175],
     tier: "keep",
-    blurb: IS_MAC
-      ? "macOS, logs, snapshots and anything this scan cannot read. The system manages these."
-      : "The system, packages, logs, swap, snapshots and anything this scan cannot read. Your package manager handles these.",
+    blurb: byOs({
+      mac: "macOS, logs, snapshots and anything this scan cannot read. The system manages these.",
+      linux: "The system, packages, logs, swap, snapshots and anything this scan cannot read. Your package manager handles these.",
+      windows: "Windows, the page file, restore points and anything this scan cannot read. Windows manages these.",
+    }),
   },
   {
     id: "caches",
@@ -82,7 +88,7 @@ export const CATEGORIES: Category[] = [
     tier: "safe",
     blurb: "Apps and tools rebuild these when they need them.",
   },
-  { id: "trash", name: "Trash", color: [239, 68, 68], tier: "safe", blurb: "Things you have already deleted." },
+  { id: "trash", name: TRASH, color: [239, 68, 68], tier: "safe", blurb: "Things you have already deleted." },
 ];
 
 export const CATEGORY: Record<CategoryId, Category> = Object.fromEntries(
