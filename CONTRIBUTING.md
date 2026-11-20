@@ -15,6 +15,16 @@ To work against your real disk without risk, use `npm start -- --dry-run`. Clear
 
 You need macOS or Linux and Node.js 20.11+. On Linux, install `unzip` first, and if `npm install` fails with `EXDEV` (when `/tmp` is a tmpfs), run it as `TMPDIR=$PWD/.tmp npm install` after `mkdir .tmp`. For the graphical view, use a terminal with kitty graphics (Ghostty, kitty, WezTerm, iTerm2); `PIXEL_RENDERER=cells` forces the character view if you want to check that.
 
+### Long-list layout regression
+
+With `tmux` installed and pixel's normal graphics runtime available, run
+`npm run test:layout`. This opt-in native character-renderer test uses only
+synthetic rows, checks three terminal sizes, and quits its own terminal session.
+It never scans or removes user files. Captured terminal buffers are retained
+under `.test-artifacts/`; set `FIX_STORAGE_TEST_DIR` to a shorter artifact path
+if a deeply nested checkout exceeds your system's Unix-socket path limit.
+This is character-renderer coverage, not kitty-graphics acceptance.
+
 ## Good first contributions
 
 - **New junk patterns.** Add a rule to [`src/core/classify.ts`](src/core/classify.ts) with a short, lowercase reason that tells the user *why* it is safe, e.g. `"rebuilds with pod install"`. Prefer `unused` over `junk` when the thing cannot be regenerated with one command.
