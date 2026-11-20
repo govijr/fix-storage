@@ -538,7 +538,11 @@ export class Store {
   /** First press arms, second press within a few seconds removes. */
   removeItem(row = this.state.row) {
     const { state } = this;
-    if (state.action || state.removing || state.scan.phase !== "done") return;
+    if (state.action || state.removing) return;
+    if (state.scan.phase !== "done") {
+      this.set({ note: "still measuring · wait for the scan to finish" });
+      return;
+    }
     const item = this.entries()[row];
     const reason = this.blocked(item);
     if (reason) {
