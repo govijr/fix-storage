@@ -47,8 +47,10 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@zenbu-labs/pixel": "^0.2.19",
     "react": "^18.3.1"
+  },
+  "optionalDependencies": {
+    "@zenbu-labs/pixel": "^0.2.19"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
@@ -66,7 +68,8 @@
   },
   "os": [
     "darwin",
-    "linux"
+    "linux",
+    "win32"
   ],
   "cpu": [
     "arm64",

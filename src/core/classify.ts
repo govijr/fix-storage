@@ -1,6 +1,6 @@
 import { basename, extname } from "node:path";
 import type { CategoryId } from "./categories";
-import { IS_MAC } from "./platform";
+import { byOs, IS_LINUX, IS_WINDOWS, TRASH } from "./platform";
 import type { Item } from "./scan";
 
 /**
@@ -67,6 +67,7 @@ export function shortAge(ms: number): string {
 
 const BUILD_CACHES = new Set([
   ".next",
+  ".vs",
   ".nuxt",
   ".turbo",
   ".parcel-cache",
@@ -80,7 +81,7 @@ const BUILD_CACHES = new Set([
   ".gradle",
   ".dart_tool",
 ]);
-const INSTALLERS = new Set([".dmg", ".pkg", ".mpkg", ".iso", ".xip", ".deb", ".rpm", ".msi"]);
+const INSTALLERS = new Set([".dmg", ".pkg", ".mpkg", ".iso", ".xip", ".deb", ".rpm", ".msi", ".msix", ".msixbundle", ".appx", ".appxbundle"]);
 const ARCHIVES = new Set([".zip", ".tar", ".gz", ".tgz", ".rar", ".7z", ".bz2", ".xz"]);
 const SCREEN_CAPTURE = /^(screen recording|screenshot|cleanshot|screen shot|recording)\b/i;
 
@@ -111,6 +112,14 @@ const SYSTEM_REASONS: Array<[RegExp, string]> = [
   [/\/System Volume Information(\/|$)/, "restore points · manage them in windows system protection"],
   [/\/Windows\/WinSxS(\/|$)/, "windows component store · disk cleanup in windows shrinks it"],
   [/\/\$Windows\.~(BT|WS)(\/|$)/, "leftovers from a windows upgrade · disk cleanup in windows removes them"],
+  [/^[a-z]:\/Windows\/Temp(\/|$)/i, "windows temporary files · disk cleanup clears them (run it as administrator)"],
+  [/^[a-z]:\/Windows\/SoftwareDistribution\/Download(\/|$)/i, "windows update downloads · disk cleanup clears them"],
+  [/^[a-z]:\/Windows\/(MEMORY\.DMP|Minidump)(\/|$)/i, "crash dumps · disk cleanup removes them (system error memory dump files)"],
+  [/^[a-z]:\/Windows\/Installer(\/|$)/i, "installer cache · windows needs it to update and remove programs"],
+  [/^[a-z]:\/Windows\.old(\/|$)/i, "the previous windows · remove it in settings › system › storage › temporary files"],
+  [/^[a-z]:\/ProgramData\/Microsoft(\/|$)/i, "windows data: defender, search index and more"],
+  [/^[a-z]:\/\$Recycle\.Bin(\/|$)/i, "other accounts' recycle bins"],
+  [/^[a-z]:\/Users(\/|$)/i, "other accounts on this computer"],
   [/\/(Windows|Recovery|\$WinREAgent)(\/|$)/, "windows itself"],
   [/\/EFI\/Microsoft(\/|$)/, "the windows boot loader · removing it stops windows from starting"],
   [/\/EFI(\/|$)/, "boot loaders · removing them can stop your computer from starting"],
@@ -118,12 +127,13 @@ const SYSTEM_REASONS: Array<[RegExp, string]> = [
 
 function systemReason(path: string): string {
   for (const [pattern, reason] of SYSTEM_REASONS) if (pattern.test(path)) return reason;
-  return IS_MAC ? "managed by macOS" : "managed by the system";
+  return byOs({ mac: "managed by macOS", linux: "managed by the system", windows: "managed by windows" });
 }
 
 /** Decides what an item probably is, from its name, where it lives, and when it was last used. */
 export function classify(item: Item, category: CategoryId, usage?: Usage, now: number = Date.now()): Label {
-  const path = item.path;
+  // The rules are written with forward slashes; Windows paths are read the same way.
+  const path = IS_WINDOWS ? item.path.replace(/\\/g, "/") : item.path;
   const name = basename(path);
   const lower = name.toLowerCase();
   const ext = extname(lower);
@@ -132,7 +142,7 @@ export function classify(item: Item, category: CategoryId, usage?: Usage, now: n
     since !== null && usage && since > 30 * DAY ? ` · ${usage.kind === "opened" ? "not opened" : "not touched"} in ${age(since)}` : "";
 
   if (category === "system") return { verdict: "system", reason: systemReason(path) };
-  if (category === "trash") return { verdict: "junk", reason: "already in the trash" };
+  if (category === "trash") return { verdict: "junk", reason: `already in the ${TRASH.toLowerCase()}` };
   if (path.includes("/SoftwareDistribution/Download"))
     return { verdict: "junk", reason: "windows update downloads · disk cleanup in windows clears them" };
   if (category === "caches") return { verdict: "junk", reason: "cache · apps rebuild it when they need it" };
@@ -150,9 +160,12 @@ export function classify(item: Item, category: CategoryId, usage?: Usage, now: n
 
   // Installers and leftovers.
   if (INSTALLERS.has(ext)) return { verdict: "junk", reason: `installer · not needed once installed${untouched}` };
+  // A downloaded setup program; elsewhere an .exe is the program itself.
+  if (IS_WINDOWS && ext === ".exe" && path.includes("/Downloads/"))
+    return { verdict: "junk", reason: `installer · not needed once installed${untouched}` };
 
   // Probably not needed, but yours to decide.
-  if ((lower === "target" || lower === "dist" || lower === "build" || lower === "out") && item.dir && path.includes("/"))
+  if ((lower === "target" || lower === "dist" || lower === "build" || lower === "out" || lower === "obj") && item.dir && path.includes("/"))
     return { verdict: "unused", reason: `build output · rebuilds from source${untouched}` };
   if ((lower === ".venv" || lower === "venv" || lower === "env") && item.dir)
     return { verdict: "unused", reason: `python environment · recreate with pip install${untouched}` };
@@ -166,7 +179,9 @@ export function classify(item: Item, category: CategoryId, usage?: Usage, now: n
     return { verdict: "unused", reason: "previous windows install · disk cleanup in windows removes it" };
 
   // Things a tool owns; deleting by hand breaks the tool.
-  if (lower === "docker.raw" || path.includes("/com.docker.docker/"))
+  if (lower === "ext4.vhdx" || /\/Packages\/[^/]*(CanonicalGroupLimited|TheDebianProject|KaliLinux|SUSE)[^/]*\/LocalState$/i.test(path))
+    return { verdict: "system", reason: "wsl's linux disk · wsl --manage <distro> --set-sparse true lets it give space back" };
+  if (lower === "docker.raw" || lower === "docker_data.vhdx" || path.includes("/com.docker.docker/"))
     return { verdict: "system", reason: "docker's disk · shrink it with docker system prune" };
   if (path.includes("/.ollama/models")) return { verdict: "system", reason: "local ai models · remove with ollama rm" };
   if (path.startsWith("/opt/homebrew") || path.startsWith("/usr/local/Cellar") || path.startsWith("/home/linuxbrew/"))
@@ -181,7 +196,7 @@ export function classify(item: Item, category: CategoryId, usage?: Usage, now: n
     return { verdict: "system", reason: "snap manages this · snap remove --revision drops old versions" };
   if (/^\/var\/lib\/libvirt(\/|$)/.test(path))
     return { verdict: "system", reason: "virtual machines · remove them in virt-manager" };
-  if (!IS_MAC && /^\/(opt|usr\/local)(\/|$)/.test(path))
+  if (IS_LINUX && /^\/(opt|usr\/local)(\/|$)/.test(path))
     return { verdict: "system", reason: "installed software · uninstall it with your package manager" };
 
   // Nothing about the name says junk; fall back to how long it has sat there.

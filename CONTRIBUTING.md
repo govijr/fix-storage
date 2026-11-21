@@ -13,17 +13,17 @@ npm run typecheck
 
 To work against your real disk without risk, use `npm start -- --dry-run`. Clearing and deleting only pretend in that mode.
 
-You need macOS or Linux and Node.js 20.11+. On Linux, install `unzip` first, and if `npm install` fails with `EXDEV` (when `/tmp` is a tmpfs), run it as `TMPDIR=$PWD/.tmp npm install` after `mkdir .tmp`. For the graphical view, use a terminal with kitty graphics (Ghostty, kitty, WezTerm, iTerm2); `PIXEL_RENDERER=cells` forces the character view if you want to check that.
+You need macOS, Linux or Windows and Node.js 20.11+. On Linux, install `unzip` first, and if `npm install` fails with `EXDEV` (when `/tmp` is a tmpfs), run it as `TMPDIR=$PWD/.tmp npm install` after `mkdir .tmp`. For the graphical view, use a terminal with kitty graphics (Ghostty, kitty, WezTerm, iTerm2); `PIXEL_RENDERER=cells` forces the character view if you want to check that. On Windows, `npm install` skips pixel, which has no Windows build, so only the text modes run there.
 
 ## Good first contributions
 
 - **New junk patterns.** Add a rule to [`src/core/classify.ts`](src/core/classify.ts) with a short, lowercase reason that tells the user *why* it is safe, e.g. `"rebuilds with pod install"`. Prefer `unused` over `junk` when the thing cannot be regenerated with one command.
 - **Culprit stop points.** Add bundle types that should be treated as one unit to `isWhole` in the same file.
-- **Folders the scan misses.** Add them to `roots()` in [`src/core/categories.ts`](src/core/categories.ts) for macOS, or `linuxRoots()` in [`src/core/layout.ts`](src/core/layout.ts) for Linux.
+- **Folders the scan misses.** Add them to `roots()` in [`src/core/categories.ts`](src/core/categories.ts) for macOS, or `linuxRoots()` or `nativeWindowsRoots()` in [`src/core/layout.ts`](src/core/layout.ts) for Linux and Windows.
 
 ## Rules for anything that removes files
 
-1. Removal goes through `cannotRemove` in [`src/core/browse.ts`](src/core/browse.ts). If a new path could ever be dangerous, add it to `protectedPaths` there (or `LINUX_MANAGED` for folders a package manager owns).
+1. Removal goes through `cannotRemove` in [`src/core/browse.ts`](src/core/browse.ts). If a new path could ever be dangerous, add it to `protectedPaths` there (or `LINUX_MANAGED` for folders a package manager owns; on Windows, `windowsProtected` and `windowsManaged`).
 5. Drives of another operating system (a Windows partition, another Linux install) and boot partitions are look only. Keep them that way.
 2. Only caches and things already in the Trash are deleted for good. Everything else is moved to the Trash.
 3. Every removal needs two presses. Don't add a way around that.

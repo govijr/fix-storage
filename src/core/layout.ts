@@ -3,7 +3,8 @@ import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { roots as macRoots, type CategoryId, type Root } from "./categories";
 import { canonical, MAC_DRIVE, mountOf, readMounts, type Drive } from "./drives";
-import { IS_MAC } from "./platform";
+import { IS_MAC, IS_WINDOWS } from "./platform";
+import { knownFolders, recycleBin, userSid } from "./windows";
 
 /** How one drive is measured: its folders and categories, and what may be removed from it. */
 export interface Layout {
@@ -26,6 +27,8 @@ export const LOOK_ONLY = {
   windows: "windows partition, look only · clean it up from windows",
   linux: "another linux install, look only · clean it up from that system",
   boot: "boot partition, look only · removing files here can stop your computer from starting",
+  windowsInstall: "another windows install, look only · clean it up from that windows",
+  removable: "usb drive, look only · it has no recycle bin, so anything removed would be gone for good",
 } as const;
 
 /** The startup disk's layout on a Mac, unchanged from before drives existed. */
@@ -159,10 +162,10 @@ const FOLDER_KIND: Array<[RegExp, CategoryId]> = [
   [/^(steamlibrary|steam|games|lutris|heroic|epic games|gog games)$/i, "apps"],
 ];
 
-/** A Windows system partition, seen from Linux. */
-async function windowsRoots(top: string): Promise<Root[]> {
+/** The system side of a Windows drive: Windows itself, programs, and the drive's Recycle Bin. */
+function windowsSystemRoots(top: string): Root[] {
   const t = (...parts: string[]) => join(top, ...parts);
-  const roots: Root[] = [
+  return [
     { path: top, category: "documents" },
     { path: t("Windows"), category: "system" },
     { path: t("pagefile.sys"), category: "system" },
@@ -179,8 +182,13 @@ async function windowsRoots(top: string): Promise<Root[]> {
     { path: t("Windows", "Temp"), category: "caches" },
     { path: t("Windows", "SoftwareDistribution", "Download"), category: "caches" },
     { path: t("$Recycle.Bin"), category: "trash" },
-    { path: t("Users"), category: "documents" },
   ];
+}
+
+/** A Windows system partition, seen from Linux. */
+async function windowsRoots(top: string): Promise<Root[]> {
+  const t = (...parts: string[]) => join(top, ...parts);
+  const roots: Root[] = [...windowsSystemRoots(top), { path: t("Users"), category: "documents" }];
   let users: string[] = [];
   try {
     users = (await fsp.readdir(t("Users"), { withFileTypes: true }))
@@ -203,6 +211,159 @@ async function windowsRoots(top: string): Promise<Root[]> {
     );
   }
   return roots;
+}
+
+/** Store packages that are WSL Linux installs; their disk image counts as Developer. */
+const WSL_PACKAGES = /^(CanonicalGroupLimited|TheDebianProject|KaliLinux|46932SUSE|WhitewaterFoundryLtd|AlmaLinux|OracleAmericaInc|FedoraProject)\./i;
+
+/** Browsers whose cache folders sit inside each profile. */
+const BROWSER_DATA = [
+  ["Google", "Chrome", "User Data"],
+  ["Microsoft", "Edge", "User Data"],
+  ["BraveSoftware", "Brave-Browser", "User Data"],
+];
+
+async function folderNames(path: string, keep: (name: string) => boolean): Promise<string[]> {
+  try {
+    return (await fsp.readdir(path, { withFileTypes: true })).filter((e) => e.isDirectory() && keep(e.name)).map((e) => e.name);
+  } catch {
+    return [];
+  }
+}
+
+/** A drive on the Windows computer fix-storage is running on. */
+async function nativeWindowsRoots(drive: Drive, home: string): Promise<Root[]> {
+  const top = drive.mount;
+  const t = (...parts: string[]) => join(top, ...parts);
+  const roots: Root[] = [];
+
+  if (drive.system) {
+    roots.push(
+      ...windowsSystemRoots(top),
+      // Clearing these needs an administrator, so they count as System data, labelled with how to clear them.
+      { path: t("Windows", "Temp"), category: "system" },
+      { path: t("Windows", "SoftwareDistribution", "Download"), category: "system" },
+      { path: t("Windows.old"), category: "system" },
+      { path: t("ProgramData", "Microsoft"), category: "system" },
+      // Other accounts' Recycle Bins and profiles; this account's own are listed below.
+      { path: t("$Recycle.Bin"), category: "system" },
+      { path: t("Users"), category: "system" },
+      { path: t("Users", "Public"), category: "documents" },
+      { path: t("XboxGames"), category: "apps" },
+      { path: t("Program Files", "Docker"), category: "developer" },
+      { path: t("ProgramData", "DockerDesktop"), category: "developer" },
+      { path: t("ProgramData", "chocolatey"), category: "developer" },
+      { path: t("Program Files", "Microsoft Visual Studio"), category: "developer" },
+      { path: t("Program Files (x86)", "Microsoft Visual Studio"), category: "developer" },
+      { path: t("Program Files (x86)", "Windows Kits"), category: "developer" },
+      { path: t("Program Files (x86)", "Android"), category: "developer" },
+      { path: t("msys64"), category: "developer" },
+      { path: t("cygwin64"), category: "developer" },
+    );
+  } else {
+    roots.push(
+      { path: top, category: "documents" },
+      { path: t("System Volume Information"), category: "system" },
+      { path: t("$Recycle.Bin"), category: "system" },
+    );
+    // On a drive that is all yours, folder names say what they hold.
+    for (const name of await folderNames(top, () => true)) {
+      const kind = FOLDER_KIND.find(([pattern]) => pattern.test(name));
+      if (kind) roots.push({ path: t(name), category: kind[1] });
+    }
+  }
+
+  const sid = await userSid();
+  if (sid) roots.push({ path: recycleBin(top, sid), category: "trash" });
+  if (!drive.home) return roots;
+
+  const f = await knownFolders();
+  const h = (...parts: string[]) => join(home, ...parts);
+  const local = (...parts: string[]) => join(f.local, ...parts);
+  const roaming = (...parts: string[]) => join(f.roaming, ...parts);
+  roots.push(
+    // The rest of the home folder: project folders count as your files, and
+    // dot-folders (~\.vscode, ~\.cargo, ...) as developer tooling.
+    { path: home, category: "documents", hidden: "developer" },
+    { path: h("AppData"), category: "apps" },
+    // Everything apps keep, each app's folder measured separately.
+    { path: f.local, category: "apps" },
+    { path: f.roaming, category: "apps" },
+    { path: h("AppData", "LocalLow"), category: "apps" },
+    { path: local("Programs"), category: "apps" },
+    { path: local("Packages"), category: "apps" },
+
+    ...DEV_FOLDERS.map((name): Root => ({ path: h(name), category: "developer" })),
+    { path: h("scoop"), category: "developer" },
+    { path: local("Android", "Sdk"), category: "developer" },
+    { path: local("Docker"), category: "developer" },
+    { path: local("wsl"), category: "developer" },
+    { path: roaming("nvm"), category: "developer" },
+
+    { path: f.pictures, category: "photos" },
+    { path: f.videos, category: "movies" },
+    { path: f.documents, category: "documents" },
+    { path: f.desktop, category: "documents" },
+    { path: f.downloads, category: "documents" },
+    { path: f.music, category: "music" },
+
+    { path: local("Temp"), category: "caches" },
+    { path: local("npm-cache"), category: "caches" },
+    { path: local("pip", "Cache"), category: "caches" },
+    { path: local("Yarn", "Cache"), category: "caches" },
+    { path: local("NuGet", "v3-cache"), category: "caches" },
+    { path: local("go-build"), category: "caches" },
+    { path: local("Microsoft", "Windows", "INetCache"), category: "caches" },
+    { path: local("Microsoft", "Windows", "WER"), category: "caches" },
+    { path: local("D3DSCache"), category: "caches" },
+    { path: local("NVIDIA", "DXCache"), category: "caches" },
+    { path: local("NVIDIA", "GLCache"), category: "caches" },
+    { path: local("AMD", "DxCache"), category: "caches" },
+    { path: local("CrashDumps"), category: "caches" },
+    { path: h(".cache"), category: "caches" },
+    { path: h(".gradle", "caches"), category: "caches" },
+    { path: h(".bun", "install", "cache"), category: "caches" },
+  );
+  for (const name of await folderNames(home, (n) => /^OneDrive\b/i.test(n))) roots.push({ path: h(name), category: "documents" });
+  for (const name of await folderNames(local("Packages"), (n) => WSL_PACKAGES.test(n)))
+    roots.push({ path: local("Packages", name), category: "developer" });
+  for (const parts of BROWSER_DATA) {
+    const data = local(...parts);
+    for (const profile of await folderNames(data, (n) => /^(Default|Profile \d+)$/.test(n))) {
+      for (const cache of ["Cache", "Code Cache", "GPUCache"]) roots.push({ path: join(data, profile, cache), category: "caches" });
+    }
+  }
+  return roots;
+}
+
+async function windowsLayout(drive: Drive, home: string): Promise<Layout> {
+  const otherInstall = drive.kind === "windows";
+  const roots = otherInstall ? await windowsRoots(drive.mount) : await nativeWindowsRoots(drive, home);
+  // A second root for one folder would count it twice; the last one listed wins,
+  // so the specific roots beat the general lists. Windows paths match whatever their case.
+  // The scan matches folders by their exact path, so each root takes its real
+  // case from the disk: the registry and the environment do not always have it.
+  const unique = new Map<string, Root>();
+  for (const root of roots) {
+    let path = root.path;
+    try {
+      path = realpathSync.native(path);
+    } catch {
+      // not there; the scan skips it
+    }
+    const key = path.toLowerCase();
+    unique.delete(key);
+    unique.set(key, { ...root, path });
+  }
+  return {
+    drive,
+    home,
+    roots: [...unique.values()],
+    lookOnly: otherInstall ? LOOK_ONLY.windowsInstall : drive.removable ? LOOK_ONLY.removable : null,
+    foreign: () => false,
+    skip: () => false,
+    canonical: (path) => path,
+  };
 }
 
 /** Another Linux install's root, seen from this one. */
@@ -246,6 +407,7 @@ const realpath = (path: string) => {
 /** Works out which folders to measure on a drive and what may be removed from it. */
 export async function layoutFor(drive: Drive, home: string = homedir()): Promise<Layout> {
   if (IS_MAC) return macLayout(home);
+  if (IS_WINDOWS) return windowsLayout(drive, home);
 
   const all = readMounts();
   const byPoint = new Map(all.map((m) => [m.point, m]));

@@ -49,7 +49,10 @@ check_platform() {
   case "$(uname -s)" in
     Darwin) OS="macos" ;;
     Linux) OS="linux" ;;
-    *) fail "fix-storage runs on macOS and Linux." ;;
+    # Git Bash, MSYS2 or Cygwin on Windows: fix-storage installs there with npm.
+    MINGW* | MSYS* | CYGWIN*) fail "on Windows, install fix-storage with npm instead:
+       npm install -g https://github.com/$REPO/releases/latest/download/fix-storage.tgz" ;;
+    *) fail "fix-storage runs on macOS, Linux and Windows." ;;
   esac
   case "$(uname -m)" in
     x86_64 | amd64 | arm64 | aarch64) ;;

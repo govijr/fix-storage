@@ -2,9 +2,10 @@ import { promises as fsp } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import type { CategoryId } from "./categories";
 import type { Layout } from "./layout";
-import { IS_MAC } from "./platform";
+import { IS_LINUX, IS_WINDOWS } from "./platform";
 import type { Item } from "./scan";
 import { forgetTrashInfo } from "./trash";
+import { forgetRecord } from "./windows";
 
 export type Clearable = Extract<CategoryId, "caches" | "trash">;
 
@@ -50,6 +51,8 @@ export async function plan(category: Clearable, known: Item[], layout: Layout): 
     for (const name of names) {
       const path = join(root.path, name);
       if (rootPaths.has(path) || layout.skip(path)) continue;
+      // The Recycle Bin's own settings file; Windows puts it back anyway.
+      if (IS_WINDOWS && category === "trash" && name.toLowerCase() === "desktop.ini") continue;
       let bytes = sizes.get(path);
       if (bytes === undefined) {
         try {
@@ -83,7 +86,8 @@ export async function clean(category: Clearable, items: Item[], layout: Layout, 
     } else {
       try {
         await fsp.rm(item.path, { recursive: true, force: true });
-        if (!IS_MAC && category === "trash") await forgetTrashInfo(item.path);
+        if (IS_LINUX && category === "trash") await forgetTrashInfo(item.path);
+        if (IS_WINDOWS && category === "trash") await forgetRecord(item.path);
         freed = item.size;
       } catch {
         // In use or protected. Whatever was removed before the failure is

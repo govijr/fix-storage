@@ -3,7 +3,7 @@ import { demoDrives, demoLayout, demoSpace, startDemoScan } from "./core/demo";
 import { describePartition, listDrives, mountCommand, pickDrive, type Drive, type Partition } from "./core/drives";
 import { capacity, gb, size, tilde } from "./core/format";
 import { layoutFor, type Layout } from "./core/layout";
-import { IS_MAC } from "./core/platform";
+import { byOs, MANY_DRIVES } from "./core/platform";
 import { diskSpace, startScan, type ScanSnapshot } from "./core/scan";
 
 /** The value given with --drive, as `--drive x` or `--drive=x`. */
@@ -96,7 +96,7 @@ function drivesText(drives: Drive[], spaces: Array<{ total: number; used: number
       lines.push(`    ${described[i].padEnd(wide)}  ${capacity(p.size).padStart(8)}    ${mountCommand(p)}`);
     });
   }
-  if (!IS_MAC && drives.length > 1) lines.push("", "Scan one with fix-storage --drive <number, name or path>.");
+  if (MANY_DRIVES && drives.length > 1) lines.push("", "Scan one with fix-storage --drive <number, name or path>.");
   return lines.join("\n") + "\n";
 }
 
@@ -126,7 +126,7 @@ function toJson(scan: ScanSnapshot, layout: Layout): string {
 function toText(scan: ScanSnapshot, layout: Layout, driveCount: number): string {
   const lines: string[] = [];
   const { drive } = layout;
-  if (!IS_MAC) {
+  if (MANY_DRIVES) {
     const where = drive.name === drive.mount ? "" : ` at ${drive.mount}`;
     lines.push(`${drive.name}${where} (${drive.fstype}${drive.device ? `, ${drive.device}` : ""})`);
   }
@@ -144,20 +144,22 @@ function toText(scan: ScanSnapshot, layout: Layout, driveCount: number): string 
     if (category.tier !== "safe" || scan.items[category.id].length === 0) continue;
     lines.push("", `${category.name}: ${category.blurb}`);
     for (const item of scan.items[category.id].slice(0, 5)) {
-      lines.push(`  ${size(item.size).padStart(8)}  ${tilde(item.path)}`);
+      lines.push(`  ${size(item.size).padStart(8)}  ${tilde(item.origin ?? item.path)}`);
     }
   }
 
   if (scan.blocked.length > 0) {
     lines.push(
       "",
-      IS_MAC
-        ? "Could not read (give your terminal Full Disk Access to include these):"
-        : "Could not read (they belong to root or another user, and count as System data):",
+      byOs({
+        mac: "Could not read (give your terminal Full Disk Access to include these):",
+        linux: "Could not read (they belong to root or another user, and count as System data):",
+        windows: "Could not read (they belong to Windows or another user, and count as System data):",
+      }),
     );
     for (const path of scan.blocked.slice(0, 8)) lines.push(`  ${tilde(path)}`);
     if (scan.blocked.length > 8) lines.push(`  and ${scan.blocked.length - 8} more`);
   }
-  if (!IS_MAC && driveCount > 1) lines.push("", `${driveCount} drives mounted · fix-storage --drives lists them`);
+  if (MANY_DRIVES && driveCount > 1) lines.push("", `${driveCount} drives mounted · fix-storage --drives lists them`);
   return lines.join("\n") + "\n";
 }

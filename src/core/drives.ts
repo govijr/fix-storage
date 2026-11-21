@@ -2,7 +2,8 @@ import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
-import { IS_MAC } from "./platform";
+import { IS_MAC, IS_WINDOWS } from "./platform";
+import { driveLetter, windowsDrives } from "./windows";
 
 /** One line of /proc/self/mountinfo: a filesystem, or part of one, mounted somewhere. */
 export interface Mount {
@@ -45,6 +46,8 @@ export interface Drive {
   home: boolean;
   /** Is the running system's root filesystem. */
   system: boolean;
+  /** A USB stick or memory card, on Windows: it has no Recycle Bin. */
+  removable?: boolean;
 }
 
 /** A partition with a filesystem on it that is not mounted, e.g. the Windows side of a dual boot. */
@@ -219,6 +222,7 @@ const ORDER: Record<DriveKind, number> = { main: 0, data: 1, windows: 2, linux: 
  */
 export async function listDrives(home: string = homedir()): Promise<{ drives: Drive[]; unmounted: Partition[] }> {
   if (IS_MAC) return { drives: [MAC_DRIVE], unmounted: [] };
+  if (IS_WINDOWS) return { drives: await windowsDrives(home), unmounted: [] };
 
   const all = readMounts();
   const devices = await blockDevices();
@@ -297,6 +301,8 @@ export function pickDrive(wanted: string | undefined, drives: Drive[]): Drive | 
   const named = drives.find((d) => [d.name, d.label, d.mount, d.device].includes(wanted));
   if (named) return named;
   if (/^\d+$/.test(wanted)) return drives[Number(wanted) - 1];
+  // A letter, with or without the colon, or any path on the drive.
+  if (IS_WINDOWS) return drives.find((d) => d.id === (driveLetter(/^[a-z]$/i.test(wanted) ? `${wanted}:` : resolve(wanted))));
   if (!isAbsolute(wanted) && !existsSync(wanted)) return undefined;
   const mount = mountOf(resolve(wanted), readMounts());
   return drives.find((d) => d.id === mount?.id);
