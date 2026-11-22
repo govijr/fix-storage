@@ -670,7 +670,7 @@ function Inside(ctx: Ctx) {
   }, [state.row, state.selected, state.stack.length]);
 
   return (
-    <Box style={{ flexDirection: "column", flexGrow: 1, flexShrink: 1, minWidth: 0, gap: fs * 0.2 }}>
+    <Box style={{ flexDirection: "column", flexGrow: 1, flexShrink: 1, minWidth: 0, flexBasis: 0, height: "100%", gap: fs * 0.2 }}>
       <InsideHeader {...ctx} />
       <Box style={{ gap: fs * 0.6, margin: { top: fs * 0.7, bottom: fs * 0.2 }, flexShrink: 0 }}>
         <T fs={fs} color={state.pane === "list" ? MUTED : FAINT} style={{ flexGrow: 1, margin: { left: ch(fs, 2) } }}>
@@ -681,9 +681,9 @@ function Inside(ctx: Ctx) {
       {entries.length === 0 ? (
         <Empty {...ctx} />
       ) : (
-        <Box style={{ flexDirection: "column", flexGrow: 1, flexShrink: 1, overflow: "scroll", scrollbar: { width: 3, thumbColor: "#2a2a2a" } }}>
+        <Box style={{ flexDirection: "column", flexGrow: 1, flexShrink: 1, flexBasis: 0, overflow: "scroll", scrollbar: { width: 3, thumbColor: "#2a2a2a" } }}>
           {entries.map((item, index) => (
-            <Box key={item.path} style={{ flexDirection: "column", flexShrink: 0 }}>
+            <Box key={item.path} style={{ flexDirection: "column", flexShrink: 0, padding: { right: ch(fs, 1) } }}>
               <ItemLine {...ctx} item={item} index={index} max={max} rowRef={(node) => (rows.current[index] = node)} />
               {index === state.row && selectedItem ? (
                 <ItemDetails {...ctx} item={item} index={index} />
@@ -755,7 +755,7 @@ export function App({ root, store }: { root: Root; store: Store }) {
         </T>
       ) : null}
       {cells ? <CellMeter state={state} fs={fs} /> : <Meter root={root} store={store} fs={fs} />}
-      <Box style={{ flexGrow: 1, flexShrink: 1, gap: fs * 3, margin: { top: fs * 0.8 }, minWidth: 0 }}>
+      <Box style={{ flexGrow: 1, flexShrink: 1, gap: fs * 3, margin: { top: fs * 0.8 }, minWidth: 0, flexBasis: 0 }}>
         <Categories {...ctx} width={left} />
         <Inside {...ctx} />
       </Box>
